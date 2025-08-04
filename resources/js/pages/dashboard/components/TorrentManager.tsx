@@ -113,7 +113,7 @@ export function TorrentManager({ seedingTorrents, onStreamRequest, onStopSeeding
     const fetchTorrents = useCallback(async () => {
         try {
             const response = await axios.get('/api/torrents', { withCredentials: true });
-            const mappedData = response.data.map((t: any) => ({
+            const mappedData = response.data.map((t: APITorrent) => ({
                 ...t,
                 infoHash: t.info_hash, 
                 size: t.size,

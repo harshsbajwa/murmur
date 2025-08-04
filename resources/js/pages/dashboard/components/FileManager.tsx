@@ -28,7 +28,6 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
@@ -47,15 +46,13 @@ import {
   Download, 
   Trash2, 
   Share2, 
-  Files, 
   Folder, 
   Table as TableIcon,
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
   ChevronDown,
-  MoreHorizontal,
-  X
+  MoreHorizontal
 } from 'lucide-react';
 import { VideoFile } from '@/types';
 
@@ -128,7 +125,7 @@ function FileTableDialog({
     };
 
     const handleBulkAction = (action: 'delete' | 'save') => {
-        const selectedFiles = files.filter((_, index) => rowSelection[index]);
+        const selectedFiles = files.filter((_, index) => (rowSelection as Record<number, boolean>)[index]);
         if (action === 'delete') {
             onBulkDelete(selectedFiles.map(f => f.id));
         } else {
@@ -250,7 +247,7 @@ function FileTableDialog({
         },
         {
             accessorKey: "type",
-            header: ({ column }) => (
+            header: () => (
                 <div className="text-right font-semibold">Type</div>
             ),
             cell: ({ row }) => {
@@ -265,7 +262,7 @@ function FileTableDialog({
         },
         {
             accessorKey: "saved",
-            header: ({ column }) => (
+            header: () => (
                 <div className="text-center font-semibold">Status</div>
             ),
             cell: ({ row }) => {
@@ -318,7 +315,7 @@ function FileTableDialog({
         },
         {
             id: "actions",
-            header: ({ column }) => (
+            header: () => (
                 <div className="text-center font-semibold">Actions</div>
             ),
             enableHiding: false,

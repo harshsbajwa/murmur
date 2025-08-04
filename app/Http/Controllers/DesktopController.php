@@ -2,8 +2,8 @@
 
 namespace App\Http\Controllers;
 
-use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -18,18 +18,18 @@ class DesktopController extends Controller
         try {
             // Cache the GitHub API response for 1 hour
             $release = Cache::remember('desktop_latest_release', 3600, function () {
-                $response = Http::timeout(10)->get('https://api.github.com/repos/murmur/desktop/releases/latest');
-                
-                if (!$response->successful()) {
+                $response = Http::timeout(10)->get('https://api.github.com/repos/harshsbajwa/murmur/releases/latest');
+
+                if (! $response->successful()) {
                     throw new \Exception('Failed to fetch release information');
                 }
-                
+
                 return $response->json();
             });
-            
+
             // Parse release assets by platform
             $downloads = $this->parseReleaseAssets($release['assets'] ?? []);
-            
+
             return response()->json([
                 'version' => $release['tag_name'] ?? 'v1.0.0',
                 'name' => $release['name'] ?? 'Murmur Desktop',
@@ -38,12 +38,12 @@ class DesktopController extends Controller
                 'downloads' => $downloads,
                 'system_requirements' => $this->getSystemRequirements(),
             ]);
-            
+
         } catch (\Exception $e) {
             Log::error('Failed to fetch desktop release information', [
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
             ]);
-            
+
             // Return fallback information if GitHub API is unavailable
             return response()->json([
                 'version' => 'v1.0.0',
@@ -55,7 +55,7 @@ class DesktopController extends Controller
             ]);
         }
     }
-    
+
     /**
      * Detect user's platform and redirect to appropriate download
      */
@@ -63,50 +63,50 @@ class DesktopController extends Controller
     {
         $userAgent = $request->header('User-Agent', '');
         $platform = $this->detectPlatform($userAgent);
-        
+
         try {
             $release = Cache::get('desktop_latest_release');
-            if (!$release) {
+            if (! $release) {
                 // Fetch fresh data if not cached
                 $this->getLatestRelease();
                 $release = Cache::get('desktop_latest_release');
             }
-            
+
             $downloads = $this->parseReleaseAssets($release['assets'] ?? []);
-            
+
             // Get the appropriate download URL for the detected platform
             $downloadUrl = $this->getDownloadUrlForPlatform($platform, $downloads);
-            
+
             if ($downloadUrl) {
                 return redirect($downloadUrl);
             }
-            
+
             // Fallback to downloads page if no direct download available
             return redirect()->route('downloads');
-            
+
         } catch (\Exception $e) {
             Log::error('Failed to redirect to download', [
                 'platform' => $platform,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
             ]);
-            
+
             return redirect()->route('downloads');
         }
     }
-    
+
     /**
      * Show the downloads page
      */
     public function downloads()
     {
         $releaseData = $this->getLatestRelease()->getData(true);
-        
+
         return inertia('Downloads', [
             'release' => $releaseData,
             'detectedPlatform' => $this->detectPlatform(request()->header('User-Agent', '')),
         ]);
     }
-    
+
     /**
      * Parse GitHub release assets into organized download links
      */
@@ -115,14 +115,14 @@ class DesktopController extends Controller
         $downloads = [
             'windows' => [],
             'macos' => [],
-            'linux' => []
+            'linux' => [],
         ];
-        
+
         foreach ($assets as $asset) {
             $name = $asset['name'] ?? '';
             $downloadUrl = $asset['browser_download_url'] ?? '';
             $size = $asset['size'] ?? 0;
-            
+
             // Windows downloads
             if (str_contains($name, 'Setup.exe')) {
                 $downloads['windows'][] = [
@@ -131,7 +131,7 @@ class DesktopController extends Controller
                     'size' => $size,
                     'type' => 'installer',
                     'architecture' => 'x64',
-                    'requirements' => 'Windows 10 or later (64-bit)'
+                    'requirements' => 'Windows 10 or later (64-bit)',
                 ];
             } elseif (str_contains($name, '.msi')) {
                 $downloads['windows'][] = [
@@ -140,10 +140,10 @@ class DesktopController extends Controller
                     'size' => $size,
                     'type' => 'msi',
                     'architecture' => 'x64',
-                    'requirements' => 'Windows 10 or later (64-bit)'
+                    'requirements' => 'Windows 10 or later (64-bit)',
                 ];
             }
-            
+
             // macOS downloads
             elseif (str_contains($name, 'macOS-Intel.dmg')) {
                 $downloads['macos'][] = [
@@ -152,7 +152,7 @@ class DesktopController extends Controller
                     'size' => $size,
                     'type' => 'dmg',
                     'architecture' => 'x86_64',
-                    'requirements' => 'macOS 11.0 or later (Intel Macs)'
+                    'requirements' => 'macOS 11.0 or later (Intel Macs)',
                 ];
             } elseif (str_contains($name, 'macOS-Apple-Silicon.dmg')) {
                 $downloads['macos'][] = [
@@ -161,10 +161,10 @@ class DesktopController extends Controller
                     'size' => $size,
                     'type' => 'dmg',
                     'architecture' => 'arm64',
-                    'requirements' => 'macOS 11.0 or later (Apple Silicon Macs)'
+                    'requirements' => 'macOS 11.0 or later (Apple Silicon Macs)',
                 ];
             }
-            
+
             // Linux downloads
             elseif (str_contains($name, '.deb')) {
                 $downloads['linux'][] = [
@@ -173,7 +173,7 @@ class DesktopController extends Controller
                     'size' => $size,
                     'type' => 'deb',
                     'architecture' => 'x86_64',
-                    'requirements' => 'Ubuntu 20.04+ or Debian 11+ (64-bit)'
+                    'requirements' => 'Ubuntu 20.04+ or Debian 11+ (64-bit)',
                 ];
             } elseif (str_contains($name, '.rpm')) {
                 $downloads['linux'][] = [
@@ -182,7 +182,7 @@ class DesktopController extends Controller
                     'size' => $size,
                     'type' => 'rpm',
                     'architecture' => 'x86_64',
-                    'requirements' => 'Fedora 35+ or RHEL 8+ (64-bit)'
+                    'requirements' => 'Fedora 35+ or RHEL 8+ (64-bit)',
                 ];
             } elseif (str_contains($name, '.AppImage')) {
                 $downloads['linux'][] = [
@@ -191,21 +191,21 @@ class DesktopController extends Controller
                     'size' => $size,
                     'type' => 'appimage',
                     'architecture' => 'x86_64',
-                    'requirements' => 'Any Linux distribution (64-bit)'
+                    'requirements' => 'Any Linux distribution (64-bit)',
                 ];
             }
         }
-        
+
         return $downloads;
     }
-    
+
     /**
      * Detect user's platform from User-Agent
      */
     private function detectPlatform(string $userAgent): string
     {
         $userAgent = strtolower($userAgent);
-        
+
         if (str_contains($userAgent, 'windows') || str_contains($userAgent, 'win32') || str_contains($userAgent, 'win64')) {
             return 'windows';
         } elseif (str_contains($userAgent, 'macintosh') || str_contains($userAgent, 'mac os x')) {
@@ -213,23 +213,22 @@ class DesktopController extends Controller
         } elseif (str_contains($userAgent, 'linux') || str_contains($userAgent, 'ubuntu') || str_contains($userAgent, 'fedora')) {
             return 'linux';
         }
-        
+
         return 'unknown';
     }
-    
+
     /**
      * Get download URL for specific platform
      */
     private function getDownloadUrlForPlatform(string $platform, array $downloads): ?string
     {
-        if (!isset($downloads[$platform]) || empty($downloads[$platform])) {
+        if (! isset($downloads[$platform]) || empty($downloads[$platform])) {
             return null;
         }
-        
-        // Return the first (usually recommended) download for the platform
+
         return $downloads[$platform][0]['url'] ?? null;
     }
-    
+
     /**
      * Get system requirements information
      */
@@ -242,15 +241,15 @@ class DesktopController extends Controller
                 'memory' => '4 GB RAM minimum, 8 GB recommended',
                 'storage' => '2 GB available space',
                 'graphics' => 'DirectX 11 compatible',
-                'network' => 'Broadband Internet connection'
+                'network' => 'Broadband Internet connection',
             ],
             'macos' => [
                 'os' => 'macOS 11.0 (Big Sur) or later',
                 'processor' => 'Intel Core i3 or Apple Silicon (M1/M2)',
-                'memory' => '4 GB RAM minimum, 8 GB recommended', 
+                'memory' => '4 GB RAM minimum, 8 GB recommended',
                 'storage' => '2 GB available space',
                 'graphics' => 'Metal-compatible graphics card',
-                'network' => 'Broadband Internet connection'
+                'network' => 'Broadband Internet connection',
             ],
             'linux' => [
                 'os' => 'Ubuntu 20.04+ or equivalent distribution',
@@ -259,11 +258,11 @@ class DesktopController extends Controller
                 'storage' => '2 GB available space',
                 'graphics' => 'OpenGL 3.3 support',
                 'network' => 'Broadband Internet connection',
-                'additional' => 'ALSA or PulseAudio for audio support'
-            ]
+                'additional' => 'ALSA or PulseAudio for audio support',
+            ],
         ];
     }
-    
+
     /**
      * Get fallback download information when GitHub API is unavailable
      */
@@ -277,8 +276,8 @@ class DesktopController extends Controller
                     'size' => 0,
                     'type' => 'installer',
                     'architecture' => 'x64',
-                    'requirements' => 'Windows 10 or later (64-bit)'
-                ]
+                    'requirements' => 'Windows 10 or later (64-bit)',
+                ],
             ],
             'macos' => [
                 [
@@ -287,8 +286,8 @@ class DesktopController extends Controller
                     'size' => 0,
                     'type' => 'dmg',
                     'architecture' => 'universal',
-                    'requirements' => 'macOS 11.0 or later'
-                ]
+                    'requirements' => 'macOS 11.0 or later',
+                ],
             ],
             'linux' => [
                 [
@@ -297,14 +296,14 @@ class DesktopController extends Controller
                     'size' => 0,
                     'type' => 'appimage',
                     'architecture' => 'x86_64',
-                    'requirements' => 'Any Linux distribution (64-bit)'
-                ]
-            ]
+                    'requirements' => 'Any Linux distribution (64-bit)',
+                ],
+            ],
         ];
     }
-    
+
     /**
-     * Track download statistics (optional)
+     * Track download statistics
      */
     public function trackDownload(Request $request)
     {
@@ -313,7 +312,7 @@ class DesktopController extends Controller
             'version' => 'required|string',
             'download_type' => 'required|string',
         ]);
-        
+
         // Log download for analytics
         Log::info('Desktop app download', [
             'platform' => $validated['platform'],
@@ -321,9 +320,9 @@ class DesktopController extends Controller
             'type' => $validated['download_type'],
             'ip' => $request->ip(),
             'user_agent' => $request->header('User-Agent'),
-            'timestamp' => now()->toISOString()
+            'timestamp' => now()->toISOString(),
         ]);
-        
+
         return response()->json(['success' => true]);
     }
 }

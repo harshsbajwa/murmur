@@ -20,13 +20,15 @@ require __DIR__.'/auth.php';
 require __DIR__.'/settings.php';
 
 Route::prefix('api')->as('api.')->group(function () {
-    Route::get('torrents', [TorrentController::class, 'index'])->name('torrents.index');
-    Route::post('torrents', [TorrentController::class, 'store'])->name('torrents.store');
-    Route::delete('torrents/{info_hash}', [TorrentController::class, 'destroy'])->name('torrents.destroy');
-    
+    Route::middleware(['auth'])->group(function () {
+        Route::get('torrents', [TorrentController::class, 'index'])->name('torrents.index');
+        Route::post('torrents', [TorrentController::class, 'store'])->name('torrents.store');
+        Route::delete('torrents/{info_hash}', [TorrentController::class, 'destroy'])->name('torrents.destroy');
+    });
+
     // Desktop application API routes
     Route::prefix('desktop')->group(function () {
-        Route::get('latest', [App\Http\Controllers\DesktopController::class, 'getLatestRelease']);
-        Route::post('track-download', [App\Http\Controllers\DesktopController::class, 'trackDownload']);
+        Route::get('latest', [App\Http\Controllers\DesktopController::class, 'getLatestRelease'])->name('desktop.latest');
+        Route::post('track-download', [App\Http\Controllers\DesktopController::class, 'trackDownload'])->name('desktop.track-download');
     });
 });

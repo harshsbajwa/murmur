@@ -1,5 +1,5 @@
 import { Head } from '@inertiajs/react';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Download, Monitor, Smartphone, HardDrive, CheckCircle, AlertCircle, ExternalLink } from 'lucide-react';
 
 interface DownloadItem {

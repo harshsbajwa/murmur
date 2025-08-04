@@ -51,8 +51,6 @@ class Torrent extends Model
 
     /**
      * Determine if the currently authenticated user can delete the torrent.
-     *
-     * @return bool
      */
     public function getCanDeleteAttribute(): bool
     {
@@ -66,7 +64,7 @@ class Torrent extends Model
 
         // Guest user check
         $guestToken = $request->session()->get('guest_token');
-        if (!$guestToken) {
+        if (! $guestToken) {
             return false;
         }
 

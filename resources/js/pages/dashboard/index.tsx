@@ -124,11 +124,14 @@ const DashboardContent = () => {
 
     const isLargeScreen = windowWidth >= 600;
 
-    const isTorrentInstance = (obj: any): obj is WebTorrent.Torrent => {
-        return obj && typeof obj === 'object' && typeof obj.infoHash === 'string' && typeof obj.on === 'function';
+    const isTorrentInstance = (obj: unknown): obj is WebTorrent.Torrent => {
+        if (!obj || typeof obj !== 'object' || obj === null) return false;
+        const candidate = obj as Record<string, unknown>;
+        return 'infoHash' in candidate && typeof candidate.infoHash === 'string' && 
+               'on' in candidate && typeof candidate.on === 'function';
     };
 
-    const getTorrentSafely = (client: WebTorrent.Instance, identifier: string): WebTorrent.Torrent | null => {
+    const getTorrentSafely = useCallback((client: WebTorrent.Instance, identifier: string): WebTorrent.Torrent | null => {
         try {
             const result = client.get(identifier);
             return isTorrentInstance(result) ? result : null;
@@ -136,7 +139,7 @@ const DashboardContent = () => {
             console.error('Error getting torrent:', error);
             return null;
         }
-    };
+    }, []);
     
     useEffect(() => {
         if (isWebTorrentReady) {
@@ -152,7 +155,8 @@ const DashboardContent = () => {
             setIsModelLoading(true);
             addLog('Initializing AI model for transcription...');
             try {
-                transcriber.current = await pipeline('automatic-speech-recognition', 'Xenova/whisper-base');
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                transcriber.current = await pipeline('automatic-speech-recognition', 'Xenova/whisper-base') as any;
                 setIsModelLoaded(true); 
                 addLog('AI model loaded successfully.');
             } catch (e) { 
@@ -169,7 +173,7 @@ const DashboardContent = () => {
           return 'loading';
         }
         return 'ready';
-    }, [isFFmpegLoading, isModelLoading, isTranscribing, conversionProgress, isFFmpegLoaded, isModelLoaded]);
+    }, [isFFmpegLoading, isModelLoading, isTranscribing, conversionProgress]);
     
     const consoleStatus = getConsoleStatus();
 
@@ -285,7 +289,7 @@ const DashboardContent = () => {
         } else {
             setTranscriptionResult(undefined);
         }
-    }, [webTorrentClient, addLog, getSubtitles]);
+    }, [webTorrentClient, addLog, getSubtitles, getTorrentSafely]);
 
     const handleDeleteFile = useCallback((fileId: string) => {
         const fileToDelete = uploadedFiles.find(f => f.id === fileId);
@@ -407,7 +411,7 @@ const DashboardContent = () => {
                 console.error('Error adding torrent:', error);
             }
         }
-    }, [isWebTorrentReady, webTorrentClient, addLog, handleStreamRequest]);
+    }, [isWebTorrentReady, webTorrentClient, addLog, handleStreamRequest, getTorrentSafely]);
     
     const handleFileUpload = useCallback((files: FileList | null) => {
         if (!files || files.length === 0) return;
@@ -464,7 +468,7 @@ const DashboardContent = () => {
             const fileToSeed = new File([blobToSeed], file.name, { type: file.type });
 
             const existingTranscription = await getSubtitles(file.id);
-            let seedOptions: any = {
+            const seedOptions: WebTorrent.TorrentOptions & { comment?: string } = {
                 announce: [
                     'wss://tracker.webtorrent.dev',
                     'wss://tracker.openwebtorrent.com',
@@ -522,7 +526,7 @@ const DashboardContent = () => {
             addLog(`Failed to create torrent: ${error}`);
             console.error('Seeding error:', error);
         }
-    }, [webTorrentClient, addLog, getSubtitles, setUploadedFiles]);
+    }, [webTorrentClient, addLog, getSubtitles, setUploadedFiles, getTorrentSafely]);
 
     const handleConvert = async (format: string) => {
         if (!ffmpeg || !currentFile) {
@@ -564,7 +568,7 @@ const DashboardContent = () => {
                 name: `${currentFile.name.split('.').slice(0, -1).join('.')}.${format}`,
                 size: (data as Uint8Array).byteLength,
                 type: `video/${format}`,
-                url: URL.createObjectURL(new Blob([(data as Uint8Array).buffer], { type: `video/${format}` })),
+                url: URL.createObjectURL(new Blob([data as Uint8Array], { type: `video/${format}` })),
                 lastModified: Date.now(),
                 isTorrent: false,
             };
@@ -677,7 +681,7 @@ const DashboardContent = () => {
             console.error('Failed to stop seeding:', error);
             addLog(`Failed to stop seeding torrent ${infoHash}: ${error}`);
         }
-    }, [webTorrentClient, addLog, setUploadedFiles]);
+    }, [webTorrentClient, addLog, setUploadedFiles, getTorrentSafely]);
 
     const dropzoneProps = {
         onDragOver: (e: React.DragEvent) => { e.preventDefault(); setIsDragging(true); },

@@ -38,21 +38,11 @@ interface VideoPlayerProps {
     onShare?: (file: VideoFile) => void;
 }
 
-const isTorrentInstance = (obj: any): obj is WebTorrent.Torrent => {
-    return obj && typeof obj === 'object' && typeof obj.infoHash === 'string' && typeof obj.on === 'function';
-};
-
-const isTorrentFileInstance = (obj: any): obj is WebTorrent.TorrentFile => {
-    return obj && 
-           typeof obj === 'object' && 
-           typeof obj.name === 'string' && 
-           typeof obj.path === 'string' && 
-           typeof obj.length === 'number' &&
-           // Accept any streaming method
-           (typeof obj.renderTo === 'function' || 
-            typeof obj.getBlobURL === 'function' ||
-            typeof obj.createReadStream === 'function' ||
-            typeof obj.getBlob === 'function');
+const isTorrentInstance = (obj: unknown): obj is WebTorrent.Torrent => {
+    if (!obj || typeof obj !== 'object' || obj === null) return false;
+    const candidate = obj as Record<string, unknown>;
+    return 'infoHash' in candidate && typeof candidate.infoHash === 'string' && 
+           'on' in candidate && typeof candidate.on === 'function';
 };
 
 export function VideoPlayer({
@@ -303,7 +293,7 @@ export function VideoPlayer({
                         }
                     };
             
-                    const handleError = (error: any) => {
+                    const handleError = (error: Event) => {
                         console.error('Video element error:', error);
                         setIsBuffering(false);
                     };

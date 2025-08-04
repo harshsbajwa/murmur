@@ -24,19 +24,28 @@ jobs:
         with:
           php-version: '8.4'
 
+      - uses: pnpm/action-setup@v3
+        name: Install pnpm
+        with:
+          version: 9
+          run_install: false
+
       - name: Install Dependencies
         run: |
           composer install -q --no-ansi --no-interaction --no-scripts --no-progress --prefer-dist
-          npm install
+          pnpm install
 
       - name: Run Pint
         run: vendor/bin/pint
 
       - name: Format Frontend
-        run: npm run format
+        run: pnpm run format
 
       - name: Lint Frontend
-        run: npm run lint
+        run: pnpm run lint
+
+      - name: Run TypeScript Type Check
+        run: pnpm run types
 
       # - name: Commit Changes
       #   uses: stefanzweifel/git-auto-commit-action@v5

@@ -2,10 +2,9 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
-import { Film, Settings, FileText, Languages, Download, Copy, CheckCircle, Loader2 } from 'lucide-react';
+import { Film, Settings, FileText, Download, Copy, CheckCircle, Loader2 } from 'lucide-react';
 import { useState } from 'react';
 import { TranscriptionResult } from '@/types';
-import { Progress } from '@/components/ui/progress';
 
 const supportedFormats = [
     { value: 'mp4', label: 'MP4', description: 'Most compatible' },
@@ -126,8 +125,7 @@ export function VideoTools({
     isReady, 
     currentFileName,
     transcriptionResult,
-    isTranscribing = false,
-    conversionProgress,
+    isTranscribing = false
 }: VideoToolsProps) {
     const [outputFormat, setOutputFormat] = useState('mp4');
     const [transcriptionLanguage, setTranscriptionLanguage] = useState('en');

@@ -19,7 +19,7 @@ export function useFFmpeg(logCallback: LogCallback, progressCallback: ProgressCa
             const ffmpeg = new FFmpeg();
             ffmpegRef.current = ffmpeg;
 
-            ffmpeg.on('log', ({ message }) => {
+            ffmpeg.on('log', ({ message }: { message: string }) => {
                 logCallback(message);
             });
             

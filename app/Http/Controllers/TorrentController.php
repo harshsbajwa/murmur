@@ -38,16 +38,16 @@ class TorrentController extends Controller
                 ['email' => 'guest@murmur.app'],
                 ['name' => 'Guest', 'password' => bcrypt(Str::random(20))]
             );
-            
+
             $sessionToken = $request->session()->get('guest_token');
-            if (!$sessionToken) {
+            if (! $sessionToken) {
                 $sessionToken = Str::random(40);
                 $request->session()->put('guest_token', $sessionToken);
             }
         } else {
             $user = Auth::user();
         }
-        
+
         // Prevent 422 errors on re-seed.
         // This is an idempotent operation.
         $torrent = $user->torrents()->updateOrCreate(
@@ -75,7 +75,7 @@ class TorrentController extends Controller
         } else {
             $guestToken = $request->session()->get('guest_token');
             if (
-                !$guestToken ||
+                ! $guestToken ||
                 $torrent->user->email !== 'guest@murmur.app' ||
                 $torrent->session_token !== $guestToken
             ) {

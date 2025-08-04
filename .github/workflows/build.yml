@@ -28,7 +28,7 @@ jobs:
         fetch-depth: 0
     
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
     
@@ -45,7 +45,7 @@ jobs:
         conan profile detect --force
     
     - name: Cache Conan packages
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: ~/.conan2
         key: conan-windows-${{ matrix.arch }}-${{ hashFiles('conanfile.py') }}
@@ -72,7 +72,7 @@ jobs:
         & $signToolPath sign /v /fd SHA256 /a /n "Murmur Desktop Self-Signed" /t http://timestamp.digicert.com $InstallerPath
 
     - name: Upload Build Artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: murmur-desktop-windows-${{ matrix.arch }}
         path: |
@@ -84,7 +84,7 @@ jobs:
     runs-on: macos-14
     strategy:
       matrix:
-        arch: [x86_64]
+        arch: [universal]
         build_type: [Release]
     
     steps:
@@ -93,7 +93,7 @@ jobs:
         fetch-depth: 0
     
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
     
@@ -110,7 +110,7 @@ jobs:
         conan profile detect --force
 
     - name: Cache Conan packages
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: ~/.conan2
         key: conan-macos-universal-${{ hashFiles('conanfile.py') }}
@@ -125,7 +125,7 @@ jobs:
       if: startsWith(github.ref, 'refs/tags/v')
       run: |
         # Path to the built DMG
-        DMG_PATH=$(find build/macos-x86_64-Release -name "*.dmg" | head -n 1)
+        DMG_PATH=$(find build/macos-universal-Release -name "*.dmg" | head -n 1)
         
         security create-keychain -p "temp_password" build.keychain
         security default-keychain -s build.keychain
@@ -137,10 +137,10 @@ jobs:
         codesign --force --sign "Murmur Desktop Self-Signed" "$DMG_PATH"
 
     - name: Upload Build Artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: murmur-desktop-macos-universal
-        path: build/macos-x86_64-Release/*.dmg
+        path: build/macos-universal-Release/*.dmg
         retention-days: 30
   
   build-linux:
@@ -156,7 +156,7 @@ jobs:
         fetch-depth: 0
     
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
     
@@ -184,7 +184,7 @@ jobs:
         conan profile detect --force
     
     - name: Cache Conan packages
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: ~/.conan2
         key: conan-linux-${{ matrix.arch }}-${{ hashFiles('conanfile.py') }}
@@ -202,7 +202,7 @@ jobs:
         python desktop/scripts/build.py --target-os linux --arch ${{ matrix.arch }} --build-type ${{ matrix.build_type }} --clean --package
     
     - name: Upload Build Artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: murmur-desktop-linux-${{ matrix.arch }}
         path: |
@@ -219,7 +219,7 @@ jobs:
     - uses: actions/checkout@v4
     
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
     
@@ -254,7 +254,7 @@ jobs:
     - uses: actions/checkout@v4
     
     - name: Download all artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
     
     - name: Prepare release assets
       run: |
