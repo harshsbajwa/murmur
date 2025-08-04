@@ -11,7 +11,11 @@ from pathlib import Path
 class BuildConfiguration:
     def __init__(self, target_os=None, arch=None, build_type="Release"):
         self.target_os = target_os or platform.system().lower()
-        self.arch = arch or ("armv8" if platform.machine() == "arm64" else "x86_64")
+        # Handle special case for universal build
+        if arch == "universal":
+            self.arch = "universal"
+        else:
+            self.arch = arch or ("armv8" if platform.machine() == "arm64" else "x86_64")
         self.build_type = build_type
         self.root_dir = Path(__file__).parent.parent
         self.build_dir = self.root_dir / "build" / f"{self.target_os}-{self.arch}-{build_type}"
@@ -37,7 +41,7 @@ class BuildManager:
         self.config = config
         self.env = config.setup_environment()
         
-    def run_command(self, cmd, cwd=None, check=True):
+    def run_command(self, cmd, cwd=None, check=True, timeout=3600):
         print(f"Running: {' '.join(cmd)}")
         try:
             result = subprocess.run(
@@ -46,11 +50,15 @@ class BuildManager:
                 env=self.env,
                 check=check,
                 capture_output=True,
-                text=True
+                text=True,
+                timeout=timeout
             )
             if result.stdout:
                 print(result.stdout)
             return result
+        except subprocess.TimeoutExpired as e:
+            print(f"Command timed out after {timeout} seconds: {' '.join(cmd)}")
+            raise
         except subprocess.CalledProcessError as e:
             print(f"Command failed: {e}")
             if e.stderr:
@@ -67,11 +75,16 @@ class BuildManager:
     def install_dependencies(self):
         """Install dependencies using Conan"""
         print("Installing dependencies with Conan...")
+        print(f"Target OS: {self.config.target_os}")
+        print(f"Architecture: {self.config.arch}")
+        print(f"Build Type: {self.config.build_type}")
         
         # Create conan profile if needed
         profile_path = Path.home() / ".conan2" / "profiles" / self.config.conan_profile
         if not profile_path.exists():
             self.create_conan_profile()
+        else:
+            print(f"Using existing profile: {profile_path}")
         
         # Install dependencies
         conan_cmd = [
@@ -94,9 +107,10 @@ class BuildManager:
         print(f"Creating Conan profile: {self.config.conan_profile}")
 
         # Default settings
+        os_name = "Macos" if self.config.target_os == "macos" else self.config.target_os.title()
         settings = {
-            "os": self.config.target_os.title(),
-            "arch": self.config.arch,
+            "os": os_name,
+            "arch": "x86_64" if self.config.arch == "universal" else self.config.arch,  # Use x86_64 for universal
             "build_type": self.config.build_type,
             "compiler": "gcc",
             "compiler.version": "11",
@@ -111,6 +125,7 @@ class BuildManager:
         elif self.config.target_os == "windows":
             settings["compiler"] = "msvc"
             settings["compiler.version"] = "193"
+            settings["compiler.runtime"] = "static" if self.config.build_type == "Release" else "dynamic"
             del settings["compiler.libcxx"]
             del settings["compiler.cppstd"]
 
@@ -354,7 +369,7 @@ def main():
     parser = argparse.ArgumentParser(description="Build Murmur Desktop for production")
     parser.add_argument("--target-os", choices=["windows", "macos", "linux"], 
                        help="Target operating system")
-    parser.add_argument("--arch", choices=["x86_64", "armv8"], 
+    parser.add_argument("--arch", choices=["x86_64", "armv8", "universal"], 
                        help="Target architecture")
     parser.add_argument("--build-type", choices=["Debug", "Release"], default="Release",
                        help="Build type")

@@ -56,6 +56,7 @@ jobs:
       uses: microsoft/setup-msbuild@v1
     
     - name: Build Application
+      timeout-minutes: 120
       run: |
         python desktop/scripts/build.py --target-os windows --arch ${{ matrix.arch }} --build-type ${{ matrix.build_type }} --clean --package
     
@@ -118,6 +119,7 @@ jobs:
           conan-macos-universal-
     
     - name: Build Universal Application
+      timeout-minutes: 120
       run: |
         python3 desktop/scripts/build.py --target-os macos --build-type Release --clean --package
     
@@ -198,6 +200,7 @@ jobs:
         sudo mv linuxdeploy-x86_64.AppImage /usr/local/bin/linuxdeploy
     
     - name: Build Application
+      timeout-minutes: 120
       run: |
         python desktop/scripts/build.py --target-os linux --arch ${{ matrix.arch }} --build-type ${{ matrix.build_type }} --clean --package
     
