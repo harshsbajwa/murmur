@@ -1,6 +1,12 @@
 #pragma once
 
 #include <QtCore/QObject>
+#include "../../core/media/MediaPipeline.hpp"
+#include "../../core/media/VideoPlayer.hpp"
+#include "../../core/storage/FileManager.hpp"
+#include "../../core/storage/StorageManager.hpp"
+#include "../../core/torrent/TorrentEngine.hpp"
+#include "../../core/transcription/WhisperEngine.hpp"
 #include <QtCore/QString>
 #include <QtCore/QVariantMap>
 #include <memory>
@@ -8,12 +14,6 @@
 
 namespace Murmur {
 
-class TorrentEngine;
-class MediaPipeline;
-class WhisperEngine;
-class StorageManager;
-class FileManager;
-class VideoPlayer;
 class PlatformAccelerator;
 
 class AppController : public QObject {
@@ -21,6 +21,14 @@ class AppController : public QObject {
     Q_PROPERTY(bool isInitialized READ isInitialized NOTIFY initializedChanged)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
     Q_PROPERTY(bool isDarkMode READ isDarkMode WRITE setDarkMode NOTIFY darkModeChanged)
+    
+    // Core engine properties
+    Q_PROPERTY(Murmur::TorrentEngine* torrentEngine READ torrentEngine CONSTANT)
+    Q_PROPERTY(Murmur::MediaPipeline* mediaPipeline READ mediaPipeline CONSTANT)
+    Q_PROPERTY(Murmur::VideoPlayer* videoPlayer READ videoPlayer CONSTANT)
+    Q_PROPERTY(Murmur::StorageManager* storageManager READ storageManager CONSTANT)
+    Q_PROPERTY(Murmur::WhisperEngine* whisperEngine READ whisperEngine CONSTANT)
+    Q_PROPERTY(Murmur::FileManager* fileManager READ fileManager CONSTANT)
     
 public:
     explicit AppController(QObject* parent = nullptr);
@@ -32,13 +40,16 @@ public:
     
     void setDarkMode(bool darkMode);
     
-    // Core engine access
+    // Core engine accessors
     TorrentEngine* torrentEngine() const { return torrentEngine_.get(); }
     MediaPipeline* mediaPipeline() const { return mediaPipeline_.get(); }
-    WhisperEngine* whisperEngine() const { return whisperEngine_.get(); }
-    StorageManager* storageManager() const { return storageManager_.get(); }
-    FileManager* fileManager() const { return fileManager_.get(); }
     VideoPlayer* videoPlayer() const { return videoPlayer_.get(); }
+    StorageManager* storageManager() const { 
+        // In test mode, we might create a dummy storage manager on demand
+        return storageManager_.get(); 
+    }
+    WhisperEngine* whisperEngine() const { return whisperEngine_.get(); }
+    FileManager* fileManager() const { return fileManager_.get(); }
     PlatformAccelerator* platformAccelerator() const { return platformAccelerator_.get(); }
     
 public slots:
@@ -69,6 +80,7 @@ public slots:
     
 signals:
     void initializedChanged();
+    void initializationComplete();
     void statusChanged();
     void darkModeChanged();
     void initializationFailed(const QString& error);

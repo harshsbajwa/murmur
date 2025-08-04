@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <atomic>
 #include <QtCore/QString>
 #include <QtCore/QByteArray>
 #include "../common/Expected.hpp"
@@ -23,7 +24,9 @@ enum class WhisperError {
     InvalidInput,
     OutOfMemory,
     InvalidModel,
-    UnsupportedFeature
+    UnsupportedFeature,
+    Cancelled,
+    UnsupportedLanguage
 };
 
 struct WhisperSegment {
@@ -186,6 +189,11 @@ public:
      * @return true if translation is supported
      */
     bool supportsTranslation() const;
+
+    /**
+     * @brief Request cancellation of the current transcription task.
+     */
+    void requestCancel();
 
     /**
      * @brief Get whisper.cpp library version

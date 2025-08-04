@@ -30,7 +30,7 @@ const QRegularExpression InputValidator::magnetUriPattern_(
     R"(^magnet:\?xt=urn:btih:[a-fA-F0-9]{40}(?:&[a-zA-Z0-9%=&.:/+_-]+)*$)");
 
 const QRegularExpression InputValidator::fileNamePattern_(
-    R"(^[a-zA-Z0-9\s\-_.()[\]]+$)");
+    R"(^[a-zA-Z0-9\s\-_.()[\]']+$)");
 
 const QRegularExpression InputValidator::pathTraversalPattern_(
     R"(\.{2}[/\\]|[/\\]\.{2}|^\.{2}$)");
@@ -57,9 +57,9 @@ bool InputValidator::validateFilePath(const QString& path) {
         return false;
     }
     
-    // Check for dangerous shell metacharacters
+    // Check for dangerous shell metacharacters (excluding single quotes which are common in filenames)
     if (path.contains(';') || path.contains('|') || path.contains('&') || 
-        path.contains('`') || path.contains('$') || path.contains('(') || path.contains(')')) {
+        path.contains('`') || path.contains('$')) {
         MURMUR_WARN("Shell metacharacter detected in path: {}", path.toStdString());
         return false;
     }
@@ -726,6 +726,267 @@ bool InputValidator::isValidCacheKey(const QString& key) {
     // Cache keys can be more flexible than identifiers
     QRegularExpression cacheKeyPattern("^[a-zA-Z0-9._-]+$");
     return cacheKeyPattern.match(key).hasMatch();
+}
+
+bool InputValidator::hasNullBytes(const QString& input) {
+    // Check for null bytes in various forms
+    if (input.contains(QChar(0))) {
+        return true;
+    }
+    
+    // Check for null bytes in UTF-8 encoding
+    QByteArray utf8 = input.toUtf8();
+    if (utf8.contains('\0')) {
+        return true;
+    }
+    
+    // Check for URL-encoded null bytes
+    if (input.contains("%00", Qt::CaseInsensitive)) {
+        return true;
+    }
+    
+    // Check for hex-encoded null bytes
+    if (input.contains("\\x00", Qt::CaseInsensitive) || 
+        input.contains("\\0", Qt::CaseInsensitive)) {
+        return true;
+    }
+    
+    return false;
+}
+
+bool InputValidator::isSymlinkSafe(const QString& path) {
+    if (path.isEmpty()) {
+        return false;
+    }
+    
+    QFileInfo fileInfo(path);
+    
+    // If path doesn't exist, we can't determine if it's a symlink
+    // but we should be cautious
+    if (!fileInfo.exists()) {
+        return true; // Allow non-existent paths (they'll be validated elsewhere)
+    }
+    
+    // Check if the file itself is a symlink
+    if (fileInfo.isSymLink()) {
+        QString target = fileInfo.symLinkTarget();
+        
+        // Reject if symlink target is empty or invalid
+        if (target.isEmpty()) {
+            MURMUR_WARN("Invalid symlink detected: {}", path.toStdString());
+            return false;
+        }
+        
+        // Reject if symlink points to system paths
+        if (isSystemPath(target)) {
+            MURMUR_WARN("Symlink to system path detected: {} -> {}", path.toStdString(), target.toStdString());
+            return false;
+        }
+        
+        // Reject if symlink creates path traversal
+        if (isPathTraversalAttempt(target)) {
+            MURMUR_WARN("Symlink path traversal detected: {} -> {}", path.toStdString(), target.toStdString());
+            return false;
+        }
+        
+        // For additional safety, reject all symlinks in security-critical contexts
+        MURMUR_WARN("Symlink rejected for security: {}", path.toStdString());
+        return false;
+    }
+    
+    // Check parent directories for symlinks
+    QString parentPath = fileInfo.absolutePath();
+    while (parentPath != "/" && parentPath != "C:\\" && !parentPath.isEmpty()) {
+        QFileInfo parentInfo(parentPath);
+        if (parentInfo.isSymLink()) {
+            MURMUR_WARN("Parent directory is symlink: {}", parentPath.toStdString());
+            return false;
+        }
+        
+        QString newParentPath = parentInfo.absolutePath();
+        if (newParentPath == parentPath) {
+            break; // Reached root
+        }
+        parentPath = newParentPath;
+    }
+    
+    return true;
+}
+
+bool InputValidator::isLengthSafe(const QString& input, int maxLength) {
+    if (input.length() > maxLength) {
+        MURMUR_WARN("Input exceeds maximum length: {} > {}", input.length(), maxLength);
+        return false;
+    }
+    
+    // Check UTF-8 byte length as well (for potential buffer overflow protection)
+    QByteArray utf8 = input.toUtf8();
+    if (utf8.length() > maxLength * 4) { // UTF-8 can be up to 4 bytes per character
+        MURMUR_WARN("Input UTF-8 encoding exceeds safe length: {} bytes", utf8.length());
+        return false;
+    }
+    
+    return true;
+}
+
+bool InputValidator::isPathSafe(const QString& path) {
+    // Comprehensive path safety check
+    if (!isLengthSafe(path, 4096)) {
+        return false;
+    }
+    
+    if (hasNullBytes(path)) {
+        MURMUR_WARN("Path contains null bytes: {}", path.left(100).toStdString());
+        return false;
+    }
+    
+    if (isPathTraversalAttempt(path)) {
+        return false;
+    }
+    
+    if (!isSymlinkSafe(path)) {
+        return false;
+    }
+    
+    if (containsEncodingAttacks(path)) {
+        return false;
+    }
+    
+    if (!isUnicodeSafe(path)) {
+        return false;
+    }
+    
+    // Check for dangerous shell characters
+    QRegularExpression dangerousChars("[;|&`$(){}\[\]\n\r\t]");
+    if (dangerousChars.match(path).hasMatch()) {
+        MURMUR_WARN("Path contains dangerous characters: {}", path.left(100).toStdString());
+        return false;
+    }
+    
+    return true;
+}
+
+bool InputValidator::containsEncodingAttacks(const QString& input) {
+    // Check for multiple levels of encoding that could hide attacks
+    QString decoded = decodeAllEncodings(input);
+    
+    // If the decoded version is significantly different, it's suspicious
+    if (decoded != input) {
+        // Check if the decoded version contains dangerous patterns
+        if (isPathTraversalAttempt(decoded) || 
+            containsSuspiciousContent(decoded) ||
+            hasNullBytes(decoded)) {
+            MURMUR_WARN("Encoding attack detected: {} -> {}", input.left(100).toStdString(), decoded.left(100).toStdString());
+            return true;
+        }
+    }
+    
+    // Check for excessive encoding layers (more than 2 is suspicious)
+    QString temp = input;
+    int decodeLayers = 0;
+    for (int i = 0; i < 5; ++i) {
+        QString newDecoded = QUrl::fromPercentEncoding(temp.toUtf8());
+        if (newDecoded != temp) {
+            decodeLayers++;
+            temp = newDecoded;
+        } else {
+            break;
+        }
+    }
+    
+    if (decodeLayers > 2) {
+        MURMUR_WARN("Excessive encoding layers detected: {} layers", decodeLayers);
+        return true;
+    }
+    
+    // Check for hex encoding patterns
+    QRegularExpression hexPattern(R"(\\x[0-9a-fA-F]{2})");
+    auto hexMatches = hexPattern.globalMatch(input);
+    int hexCount = 0;
+    while (hexMatches.hasNext()) {
+        hexMatches.next();
+        hexCount++;
+    }
+    
+    if (hexCount > 10) { // More than 10 hex sequences is suspicious
+        MURMUR_WARN("Excessive hex encoding detected: {} sequences", hexCount);
+        return true;
+    }
+    
+    return false;
+}
+
+bool InputValidator::isUnicodeSafe(const QString& input) {
+    // Check for dangerous Unicode characters
+    
+    // Unicode bidirectional override characters
+    if (input.contains(QChar(0x200E)) || // Left-to-right mark
+        input.contains(QChar(0x200F)) || // Right-to-left mark
+        input.contains(QChar(0x202A)) || // Left-to-right embedding
+        input.contains(QChar(0x202B)) || // Right-to-left embedding
+        input.contains(QChar(0x202C)) || // Pop directional formatting
+        input.contains(QChar(0x202D)) || // Left-to-right override
+        input.contains(QChar(0x202E)) || // Right-to-left override
+        input.contains(QChar(0x2066)) || // Left-to-right isolate
+        input.contains(QChar(0x2067)) || // Right-to-left isolate
+        input.contains(QChar(0x2068)) || // First strong isolate
+        input.contains(QChar(0x2069))) { // Pop directional isolate
+        MURMUR_WARN("Dangerous Unicode bidirectional characters detected");
+        return false;
+    }
+    
+    // Zero-width characters that could hide content
+    if (input.contains(QChar(0xFEFF)) || // Zero-width no-break space
+        input.contains(QChar(0x200B)) || // Zero-width space
+        input.contains(QChar(0x200C)) || // Zero-width non-joiner
+        input.contains(QChar(0x200D))) { // Zero-width joiner
+        MURMUR_WARN("Zero-width Unicode characters detected");
+        return false;
+    }
+    
+    // Non-breaking space (sometimes used to bypass filters)
+    if (input.contains(QChar(0x00A0))) {
+        MURMUR_WARN("Non-breaking space detected");
+        return false;
+    }
+    
+    return true;
+}
+
+QString InputValidator::decodeAllEncodings(const QString& input) {
+    QString result = input;
+    QString previous;
+    
+    // Iterate through multiple encoding layers (max 5 to prevent infinite loops)
+    for (int i = 0; i < 5; ++i) {
+        previous = result;
+        
+        // URL decode
+        QString urlDecoded = QUrl::fromPercentEncoding(result.toUtf8());
+        if (urlDecoded != result) {
+            result = urlDecoded;
+            continue;
+        }
+        
+        // HTML entity decode (basic)
+        QString htmlDecoded = result;
+        htmlDecoded.replace("&lt;", "<")
+                   .replace("&gt;", ">")
+                   .replace("&amp;", "&")
+                   .replace("&quot;", "\"")
+                   .replace("&#39;", "'");
+        if (htmlDecoded != result) {
+            result = htmlDecoded;
+            continue;
+        }
+        
+        // If no changes were made, we're done
+        if (result == previous) {
+            break;
+        }
+    }
+    
+    return result;
 }
 
 } // namespace Murmur

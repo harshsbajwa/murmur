@@ -70,14 +70,10 @@ public:
     ~ModelDownloader() override;
 
     /**
-     * @brief Download a file with automatic retry and resume
-     * @param url Source URL
-     * @param localPath Destination file path
-     * @param expectedChecksum SHA256 checksum for verification (optional)
-     * @param enableResume Allow resuming partial downloads
-     * @return A future that resolves with the local path on success, or an error.
+     * @brief Synchronously downloads a file. This is a blocking operation.
+     * @return The local path on success, or an error.
      */
-    QFuture<Expected<QString, DownloadError>> downloadFile(
+    Expected<QString, DownloadError> downloadFile(
         const QString& url,
         const QString& localPath,
         const QString& expectedChecksum = QString(),

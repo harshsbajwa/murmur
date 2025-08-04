@@ -13,6 +13,7 @@
 #include <QCoreApplication>
 #include <QRegularExpression>
 #include <QDebug>
+#include <QThread>
 
 namespace Murmur {
 
@@ -21,7 +22,7 @@ const int StorageManager::CURRENT_SCHEMA_VERSION;
 
 StorageManager::StorageManager(QObject* parent)
     : QObject(parent)
-    , connectionName_(QString("MurmurDB_%1_%2").arg(QDateTime::currentMSecsSinceEpoch()).arg(reinterpret_cast<quintptr>(this), 0, 16))
+    , connectionName_(QString("MurmurDB_%1_%2_%3").arg(QDateTime::currentMSecsSinceEpoch()).arg(reinterpret_cast<quintptr>(this), 0, 16).arg(reinterpret_cast<quintptr>(QThread::currentThreadId()), 0, 16))
     , autoCommit_(true)
     , inTransaction_(false) {
     
@@ -131,13 +132,32 @@ Expected<bool, StorageError> StorageManager::initialize(const QString& databaseP
         QDir().mkpath(dataDir);
         dbPath = QDir(dataDir).filePath("murmur.db");
     }
+
+    // If already initialized and open with the correct path, return success
+    if (database_.isOpen() && database_.databaseName() == dbPath) {
+        return true;
+    }
+
+    // If the connection is open, close it before re-initializing
+    if (database_.isOpen()) {
+        database_.close();
+    }
     
-    // Create database connection
-    database_ = QSqlDatabase::addDatabase("QSQLITE", connectionName_);
+    // Get a handle to the database connection, adding it if it doesn't exist
+    if (QSqlDatabase::contains(connectionName_)) {
+        database_ = QSqlDatabase::database(connectionName_);
+    } else {
+        database_ = QSqlDatabase::addDatabase("QSQLITE", connectionName_);
+    }
+    
     database_.setDatabaseName(dbPath);
     
     if (!database_.open()) {
         Logger::instance().error("Failed to open database: {}", database_.lastError().text().toStdString());
+        // Clean up the connection if open fails
+        if (QSqlDatabase::contains(connectionName_)) {
+             QSqlDatabase::removeDatabase(connectionName_);
+        }
         return makeUnexpected(StorageError::ConnectionFailed);
     }
     
@@ -151,7 +171,17 @@ Expected<bool, StorageError> StorageManager::initialize(const QString& databaseP
     config.exec("PRAGMA journal_mode = " + DEFAULT_JOURNAL_MODE);
     
     // Enable foreign keys
-    config.exec("PRAGMA foreign_keys = ON");
+    if (!config.exec("PRAGMA foreign_keys = ON")) {
+        Logger::instance().error("Failed to enable foreign key constraints: {}", config.lastError().text().toStdString());
+        return makeUnexpected(StorageError::QueryFailed);
+    }
+    
+    // Verify foreign keys are enabled
+    config.exec("PRAGMA foreign_keys");
+    if (config.next() && config.value(0).toInt() != 1) {
+        Logger::instance().error("Foreign key constraints are not enabled");
+        return makeUnexpected(StorageError::QueryFailed);
+    }
     
     // Set synchronous mode for better performance
     config.exec("PRAGMA synchronous = NORMAL");
@@ -184,7 +214,9 @@ void StorageManager::close() {
     
     // Release reference to the connection
     database_ = QSqlDatabase(); 
-    QSqlDatabase::removeDatabase(connectionName_);
+    if (QSqlDatabase::contains(connectionName_)) {
+        QSqlDatabase::removeDatabase(connectionName_);
+    }
 }
 
 bool StorageManager::isOpen() const {
@@ -245,6 +277,12 @@ Expected<bool, StorageError> StorageManager::rollbackTransaction() {
 }
 
 Expected<bool, StorageError> StorageManager::addTorrent(const TorrentRecord& torrent) {
+    // Use the helper method that properly handles constraint violations
+    return insertTorrentRecord(torrent);
+}
+
+// Helper method for inserting torrent records
+Expected<bool, StorageError> StorageManager::insertTorrentRecord(const TorrentRecord& torrent) {
     auto validateResult = validateTorrentRecord(torrent);
     if (validateResult.hasError()) {
         return validateResult;
@@ -293,7 +331,11 @@ Expected<bool, StorageError> StorageManager::updateTorrent(const TorrentRecord& 
     query.bindValue(5, torrent.progress);
     query.bindValue(6, torrent.status);
     query.bindValue(7, QJsonDocument(torrent.metadata).toJson(QJsonDocument::Compact));
-    query.bindValue(8, torrent.files.join(";"));
+    
+    // Ensure files is never null or empty by providing a valid empty string
+    QString filesString = torrent.files.isEmpty() ? "" : torrent.files.join(";");
+    query.bindValue(8, filesString);
+    
     query.bindValue(9, torrent.seeders);
     query.bindValue(10, torrent.leechers);
     query.bindValue(11, torrent.downloaded);
@@ -361,7 +403,7 @@ Expected<QList<TorrentRecord>, StorageError> StorageManager::getAllTorrents() {
 
 Expected<bool, StorageError> StorageManager::createTables() {
     QStringList createStatements = {
-        // Torrents table with strict constraints
+        // Torrents table
         R"(CREATE TABLE IF NOT EXISTS torrents (
             info_hash TEXT PRIMARY KEY CHECK(length(info_hash) = 40 AND info_hash GLOB '[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]'),
             name TEXT NOT NULL CHECK(length(trim(name)) > 0),
@@ -379,9 +421,9 @@ Expected<bool, StorageError> StorageManager::createTables() {
             downloaded INTEGER NOT NULL DEFAULT 0 CHECK(downloaded >= 0),
             uploaded INTEGER NOT NULL DEFAULT 0 CHECK(uploaded >= 0),
             ratio REAL NOT NULL DEFAULT 0.0 CHECK(ratio >= 0.0)
-        ))"
+        ))",
         
-        // Media table with strict constraints
+        // Media table
         R"(CREATE TABLE IF NOT EXISTS media (
             id TEXT PRIMARY KEY CHECK(length(trim(id)) > 0),
             torrent_hash TEXT CHECK(torrent_hash IS NULL OR (length(torrent_hash) = 40 AND torrent_hash GLOB '[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]')),
@@ -542,7 +584,11 @@ void StorageManager::bindTorrentParams(QSqlQuery& query, const TorrentRecord& to
     query.bindValue(7, torrent.progress);
     query.bindValue(8, torrent.status);
     query.bindValue(9, QJsonDocument(torrent.metadata).toJson(QJsonDocument::Compact));
-    query.bindValue(10, torrent.files.join(";"));
+    
+    // Ensure files is never null or empty by providing a valid empty string
+    QString filesString = torrent.files.isEmpty() ? "" : torrent.files.join(";");
+    query.bindValue(10, filesString);
+    
     query.bindValue(11, torrent.seeders);
     query.bindValue(12, torrent.leechers);
     query.bindValue(13, torrent.downloaded);
@@ -584,8 +630,11 @@ QString StorageManager::generateId() {
 }
 
 StorageError StorageManager::mapSqlError(const QSqlError& error) {
-    // First check error text for specific constraint violations
     QString errorText = error.text().toLower();
+    
+    if (error.nativeErrorCode() == "13") {
+        return StorageError::DiskSpaceError;
+    }
     
     if (errorText.contains("unique constraint") || 
         errorText.contains("primary key constraint") ||
@@ -595,7 +644,10 @@ StorageError StorageManager::mapSqlError(const QSqlError& error) {
         return StorageError::ConstraintViolation;
     }
     
-    // Then check by error type
+    if (errorText.contains("permission denied") || errorText.contains("readonly database")) {
+        return StorageError::PermissionDenied;
+    }
+
     switch (error.type()) {
         case QSqlError::ConnectionError:
             return StorageError::ConnectionFailed;
@@ -608,7 +660,6 @@ StorageError StorageManager::mapSqlError(const QSqlError& error) {
     }
 }
 
-// Placeholder implementations for remaining methods
 Expected<bool, StorageError> StorageManager::migrateDatabase() {
     QMutexLocker locker(&databaseMutex_);
     
@@ -743,7 +794,6 @@ bool StorageManager::applyMigration(int toVersion) {
 }
 
 Expected<MediaRecord, StorageError> StorageManager::getMedia(const QString& mediaId) {
-    // Media IDs are UUIDs, not torrent info hashes - validate as UUID format
     if (mediaId.isEmpty() || mediaId.length() > 255) {
         return makeUnexpected(StorageError::InvalidData);
     }
@@ -846,7 +896,13 @@ Expected<bool, StorageError> StorageManager::updatePlaybackPosition(const QStrin
     return true;
 }
 
-Expected<QString, StorageError> StorageManager::addMedia(const MediaRecord& media) {    
+Expected<QString, StorageError> StorageManager::addMedia(const MediaRecord& media) {
+    // Use the helper method that properly handles constraint violations
+    return insertMediaRecord(media);
+}
+
+// Helper method for inserting media records
+Expected<QString, StorageError> StorageManager::insertMediaRecord(const MediaRecord& media) {
     // Create a copy to modify the ID if needed
     MediaRecord mediaWithId = media;
     if (mediaWithId.id.isEmpty()) {
@@ -947,30 +1003,55 @@ void StorageManager::bindSessionParams(QSqlQuery& query, const PlaybackSession& 
 
 Expected<bool, StorageError> StorageManager::validateMediaRecord(const MediaRecord& media) {
     if (media.id.isEmpty() || media.id.length() > 255) {
+        Logger::instance().error("Invalid media ID: '{}' (length: {})", media.id.toStdString(), media.id.length());
         return makeUnexpected(StorageError::InvalidData);
     }
     
+    // Validate torrentHash format only - allow any valid 40-hex string
+    // Don't check for existence here - let the database foreign key constraint handle that
+    if (!media.torrentHash.isEmpty()) {
+        if (media.torrentHash.length() != 40) {
+            Logger::instance().error("Invalid torrent hash length in media record: '{}' (length: {})", 
+                                    media.torrentHash.toStdString(), media.torrentHash.length());
+            return makeUnexpected(StorageError::InvalidData);
+        }
+        
+        // Check if it's valid hexadecimal
+        QRegularExpression hexPattern("^[0-9a-fA-F]{40}$");
+        if (!hexPattern.match(media.torrentHash).hasMatch()) {
+            Logger::instance().error("Invalid torrent hash format in media record: '{}' (not hexadecimal)", 
+                                    media.torrentHash.toStdString());
+            return makeUnexpected(StorageError::InvalidData);
+        }
+    }
+    
     if (media.filePath.isEmpty() || !InputValidator::validateFilePath(media.filePath)) {
+        Logger::instance().error("Invalid file path: '{}'", media.filePath.toStdString());
         return makeUnexpected(StorageError::InvalidData);
     }
     
     if (media.originalName.isEmpty() || !InputValidator::validateFileName(media.originalName)) {
+        Logger::instance().error("Invalid original name: '{}'", media.originalName.toStdString());
         return makeUnexpected(StorageError::InvalidData);
     }
     
     if (media.fileSize < 0) {
+        Logger::instance().error("Invalid file size: {}", media.fileSize);
         return makeUnexpected(StorageError::InvalidData);
     }
     
     if (media.duration < 0) {
+        Logger::instance().error("Invalid duration: {}", media.duration);
         return makeUnexpected(StorageError::InvalidData);
     }
     
     if (media.width < 0 || media.height < 0) {
+        Logger::instance().error("Invalid dimensions: {}x{}", media.width, media.height);
         return makeUnexpected(StorageError::InvalidData);
     }
     
     if (media.frameRate < 0.0) {
+        Logger::instance().error("Invalid frame rate: {}", media.frameRate);
         return makeUnexpected(StorageError::InvalidData);
     }
     
@@ -1509,7 +1590,6 @@ Expected<bool, StorageError> StorageManager::updateTranscriptionStatus(const QSt
     return true;
 }
 
-// Complete missing playback session operations
 Expected<QString, StorageError> StorageManager::recordPlaybackSession(const PlaybackSession& session) {
     QMutexLocker locker(&databaseMutex_);
     
@@ -1662,7 +1742,6 @@ Expected<bool, StorageError> StorageManager::clearPlaybackPositions() {
     return true;
 }
 
-// Complete missing search operations
 Expected<QList<TorrentRecord>, StorageError> StorageManager::searchTorrents(const QString& searchQuery) {
     QString sanitizedQuery = sanitizeQuery(searchQuery);
     if (sanitizedQuery.isEmpty()) {

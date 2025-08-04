@@ -179,7 +179,7 @@ void TestSimpleRealMedia::testTestUtilsWithRealFiles() {
     QString testVideo = TestUtils::createTestVideoFile(_testScope.getTempDirectory(), 5, "mp4");
     QString testAudio = TestUtils::createTestAudioFile(_testScope.getTempDirectory(), 3, "wav");
     
-    // If real samples are used, these should exist
+    // These should exist
     if (!testVideo.isEmpty()) {
         ASSERT_FILE_EXISTS(testVideo);
     }

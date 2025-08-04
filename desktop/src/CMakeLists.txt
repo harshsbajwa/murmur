@@ -15,6 +15,8 @@ add_library(MurmurCore STATIC
     # Security layer
     core/security/InputValidator.hpp
     core/security/InputValidator.cpp
+    core/security/InfoHashValidator.hpp
+    core/security/InfoHashValidator.cpp
     core/security/SandboxManager.hpp
     core/security/SandboxManager.cpp
     core/security/SecureIPC.hpp
@@ -174,9 +176,37 @@ else()
 endif()
 
 # Main application
-qt_add_executable(MurmurDesktopApp
-    main.cpp
+if(WIN32)
+    qt_add_executable(MurmurDesktopApp WIN32
+        main.cpp
+    )
+else()
+    qt_add_executable(MurmurDesktopApp
+        main.cpp
+    )
+endif()
+
+# Set application properties
+set_target_properties(MurmurDesktopApp PROPERTIES
+    OUTPUT_NAME "MurmurDesktop"
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR}
 )
+
+# macOS bundle configuration
+if(APPLE)
+    set_target_properties(MurmurDesktopApp PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_BUNDLE_NAME "Murmur Desktop"
+        MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
+        MACOSX_BUNDLE_GUI_IDENTIFIER "app.murmur.desktop"
+        MACOSX_BUNDLE_ICON_FILE "app.icns"
+        MACOSX_BUNDLE_INFO_STRING "Murmur Desktop ${PROJECT_VERSION}"
+        MACOSX_BUNDLE_LONG_VERSION_STRING ${PROJECT_VERSION}
+        MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}
+        MACOSX_BUNDLE_COPYRIGHT "© 2025 Murmur. All rights reserved."
+    )
+endif()
 
 qt_add_qml_module(MurmurDesktopApp
     URI Murmur
@@ -191,10 +221,62 @@ qt_add_qml_module(MurmurDesktopApp
         qml/components/SettingsDialog.qml
         qml/components/MainMenuBar.qml
         qml/components/AboutDialog.qml
-    RESOURCE_PREFIX /
+    RESOURCES
+        ../resources/images/backward10.svg
+        ../resources/images/ff.svg
+        ../resources/images/forward10.svg
+        ../resources/images/link.svg
+        ../resources/images/loop.svg
+        ../resources/images/more.svg
+        ../resources/images/mute.svg
+        ../resources/images/open_new.svg
+        ../resources/images/pause_symbol.svg
+        ../resources/images/play_symbol.svg
+        ../resources/images/rewind.svg
+        ../resources/images/settings.svg
+        ../resources/images/speaker.svg
+        ../resources/images/stop_symbol.svg
+        ../resources/images/url.svg
+        ../resources/images/volume.svg
+        ../resources/images/volume_mute.svg
+        ../resources/images/zoom_maximize.svg
+        ../resources/images/zoom_minimize.svg
+        ../resources/icons/app.png
+        ../resources/icons/app.icns
 )
 
 target_link_libraries(MurmurDesktopApp PRIVATE
     MurmurUI
     Qt6::QuickControls2
 )
+
+# Installation rules
+install(TARGETS MurmurDesktopApp
+    BUNDLE DESTINATION .
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+# Platform-specific installation
+if(WIN32)
+    # Install Qt dependencies
+    find_program(WINDEPLOYQT_EXECUTABLE windeployqt HINTS ${Qt6_DIR}/../../../bin)
+    if(WINDEPLOYQT_EXECUTABLE)
+        install(CODE "execute_process(COMMAND ${WINDEPLOYQT_EXECUTABLE} --qmldir ${CMAKE_SOURCE_DIR}/src/qml $<TARGET_FILE:MurmurDesktopApp>)")
+    endif()
+elseif(APPLE)
+    # Install macOS bundle and dependencies
+    find_program(MACDEPLOYQT_EXECUTABLE macdeployqt HINTS ${Qt6_DIR}/../../../bin)
+    if(MACDEPLOYQT_EXECUTABLE)
+        install(CODE "execute_process(COMMAND ${MACDEPLOYQT_EXECUTABLE} $<TARGET_BUNDLE_DIR:MurmurDesktopApp> -qmldir=${CMAKE_SOURCE_DIR}/src/qml)")
+    endif()
+    # Install app icon
+    install(FILES ../resources/icons/app.icns DESTINATION MurmurDesktopApp.app/Contents/Resources/)
+elseif(UNIX)
+    # Install desktop file and icon for Linux
+    configure_file(../packaging/linux/murmur-desktop.desktop.in murmur-desktop.desktop @ONLY)
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/murmur-desktop.desktop 
+            DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications)
+    install(FILES ../resources/icons/app.png 
+            DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/256x256/apps/
+            RENAME murmur-desktop.png)
+endif()

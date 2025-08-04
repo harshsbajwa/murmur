@@ -6,15 +6,38 @@
 #include <QUrl>
 #include <QDir>
 #include <QSettings>
+#include <QStorageInfo>
+#include <QDateTime>
+#include <QStandardPaths>
+#include <QFileInfo>
 
 namespace Murmur {
 
 FileManagerController::FileManagerController(QObject* parent)
-    : QObject(parent) {
+    : QObject(parent), ready_(false) {
     Logger::instance().info("FileManagerController created");
 }
 
+void FileManagerController::setReady(bool ready) {
+    if (ready_ != ready) {
+        ready_ = ready;
+        Logger::instance().debug("FileManagerController ready state changed to: {}", ready ? "true" : "false");
+        emit readyChanged();
+    }
+}
+
+bool FileManagerController::isReady() const {
+    return ready_;
+}
+
+void FileManagerController::updateReadyState() {
+    bool isReadyNow = fileManager_ != nullptr;
+    setReady(isReadyNow);
+}
+
 void FileManagerController::setFileManager(FileManager* fileManager) {
+    bool wasReady = isReady();
+    
     if (fileManager_ != fileManager) {
         if (fileManager_) {
             disconnect(fileManager_, nullptr, this, nullptr);
@@ -32,8 +55,19 @@ void FileManagerController::setFileManager(FileManager* fileManager) {
             connect(fileManager_, &FileManager::operationFailed,
                     this, &FileManagerController::onOperationFailed);
             
-            emit pathsChanged();
-        }
+    // Initialize disk space values
+    updateDiskSpace();
+    
+    // Initialize file model
+    refreshFileModel();
+    
+    Logger::instance().info("FileManager connected successfully");
+    emit pathsChanged();
+} else {
+    Logger::instance().warn("FileManager set to null");
+}
+
+updateReadyState();
     }
 }
 
@@ -55,6 +89,26 @@ int FileManagerController::activeOperationsCount() const {
 
 bool FileManagerController::isBusy() const {
     return isBusy_;
+}
+
+qint64 FileManagerController::totalSpace() const {
+    // Update disk space if it's not initialized or if it's been more than 5 seconds since last update
+    if (totalSpace_ == -1 || lastDiskSpaceUpdate_.msecsTo(QDateTime::currentDateTime()) > 5000) {
+        const_cast<FileManagerController*>(this)->updateDiskSpace();
+    }
+    return totalSpace_;
+}
+
+qint64 FileManagerController::usedSpace() const {
+    // Update disk space if it's not initialized or if it's been more than 5 seconds since last update
+    if (usedSpace_ == -1 || lastDiskSpaceUpdate_.msecsTo(QDateTime::currentDateTime()) > 5000) {
+        const_cast<FileManagerController*>(this)->updateDiskSpace();
+    }
+    return usedSpace_;
+}
+
+QStringList FileManagerController::fileModel() const {
+    return fileModel_;
 }
 
 void FileManagerController::analyzeDirectory(const QString& path) {
@@ -225,6 +279,26 @@ void FileManagerController::importVideo(const QString& sourcePath, const QString
         return;
     }
     
+    Logger::instance().info("Importing video: {} to {}", sourcePath.toStdString(), 
+                           destinationDir.isEmpty() ? "default directory" : destinationDir.toStdString());
+    
+    // Validate source path
+    if (sourcePath.isEmpty()) {
+        emit fileError("importVideo", sourcePath, "Source path is empty");
+        return;
+    }
+    
+    QFileInfo sourceInfo(sourcePath);
+    if (!sourceInfo.exists()) {
+        emit fileError("importVideo", sourcePath, "Source file does not exist");
+        return;
+    }
+    
+    if (!isVideoFile(sourcePath)) {
+        emit fileError("importVideo", sourcePath, "File is not a valid video format");
+        return;
+    }
+    
     setBusy(true);
     
     auto future = fileManager_->importVideo(sourcePath, destinationDir);
@@ -237,8 +311,10 @@ void FileManagerController::importVideo(const QString& sourcePath, const QString
         setBusy(false);
         
         if (result.hasValue()) {
+            Logger::instance().info("Video imported successfully: {}", result.value().toStdString());
             emit videoImported(sourcePath, result.value());
         } else {
+            Logger::instance().error("Video import failed: {}", translateFileError(result.error()).toStdString());
             emit fileError("importVideo", sourcePath, translateFileError(result.error()));
         }
     });
@@ -532,6 +608,114 @@ void FileManagerController::calculateTotalProgress() {
     }
     
     emit progressChanged();
+}
+
+void FileManagerController::updateDiskSpace() {
+    if (!fileManager_) {
+        totalSpace_ = 0;
+        usedSpace_ = 0;
+        lastDiskSpaceUpdate_ = QDateTime::currentDateTime();
+        emit diskSpaceChanged();
+        return;
+    }
+    
+    QString downloadPath = fileManager_->getDefaultDownloadPath();
+    if (downloadPath.isEmpty()) {
+        downloadPath = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+    }
+    
+    // Ensure the path exists
+    QDir dir(downloadPath);
+    if (!dir.exists()) {
+        // Try to create it
+        if (!dir.mkpath(".")) {
+            Logger::instance().warn("Failed to create download directory: {}", downloadPath.toStdString());
+            totalSpace_ = 0;
+            usedSpace_ = 0;
+            lastDiskSpaceUpdate_ = QDateTime::currentDateTime();
+            emit diskSpaceChanged();
+            return;
+        }
+    }
+    
+    QStorageInfo storage(downloadPath);
+    if (storage.isValid() && storage.isReady()) {
+        totalSpace_ = storage.bytesTotal();
+        usedSpace_ = totalSpace_ - storage.bytesAvailable();
+    } else {
+        // Fallback to getting storage info for the root path
+        QStorageInfo rootStorage(QDir::rootPath());
+        if (rootStorage.isValid() && rootStorage.isReady()) {
+            totalSpace_ = rootStorage.bytesTotal();
+            usedSpace_ = totalSpace_ - rootStorage.bytesAvailable();
+        } else {
+            totalSpace_ = 0;
+            usedSpace_ = 0;
+        }
+    }
+    
+    lastDiskSpaceUpdate_ = QDateTime::currentDateTime();
+    emit diskSpaceChanged();
+}
+
+void FileManagerController::refreshFileModel() {
+    if (!fileManager_) {
+        Logger::instance().warn("FileManager not available for file model refresh");
+        return;
+    }
+    
+    fileModel_.clear();
+    
+    // Get the download directory
+    QString downloadPath = fileManager_->getDefaultDownloadPath();
+    if (downloadPath.isEmpty()) {
+        downloadPath = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation) + "/Murmur";
+    }
+    
+    // Scan for video files in the download directory
+    QDir dir(downloadPath);
+    if (!dir.exists()) {
+        Logger::instance().info("Download directory doesn't exist: {}", downloadPath.toStdString());
+        emit fileModelChanged();
+        return;
+    }
+    
+    // Set up file filters for common video formats
+    QStringList videoExtensions;
+    videoExtensions << "*.mp4" << "*.avi" << "*.mkv" << "*.mov" << "*.wmv" 
+                   << "*.flv" << "*.webm" << "*.m4v" << "*.3gp" << "*.ogv";
+    
+    dir.setNameFilters(videoExtensions);
+    dir.setFilter(QDir::Files | QDir::Readable);
+    dir.setSorting(QDir::Time | QDir::Reversed); // Most recent first
+    
+    QFileInfoList fileList = dir.entryInfoList();
+    
+    for (const QFileInfo& fileInfo : fileList) {
+        // Add full file path to the model
+        fileModel_.append(fileInfo.absoluteFilePath());
+    }
+    
+    Logger::instance().info("File model refreshed with {} video files", fileModel_.size());
+    emit fileModelChanged();
+}
+
+void FileManagerController::removeFile(const QString& filePath) {
+    if (!fileManager_) {
+        Logger::instance().error("FileManager not available");
+        return;
+    }
+    
+    Logger::instance().info("Removing file from model: {}", filePath.toStdString());
+    
+    int index = fileModel_.indexOf(filePath);
+    if (index >= 0) {
+        fileModel_.removeAt(index);
+        Logger::instance().info("File removed from model. New size: {}", fileModel_.size());
+        emit fileModelChanged();
+    } else {
+        Logger::instance().warn("File not found in model: {}", filePath.toStdString());
+    }
 }
 
 } // namespace Murmur

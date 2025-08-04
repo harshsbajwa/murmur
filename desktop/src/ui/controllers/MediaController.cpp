@@ -8,39 +8,71 @@
 
 namespace Murmur {
 
+void MediaController::setReady(bool ready) {
+    if (ready_ != ready) {
+        ready_ = ready;
+        Logger::instance().debug("MediaController ready state changed to: {}", ready ? "true" : "false");
+        emit readyChanged();
+    }
+}
+
+bool MediaController::isReady() const {
+    return ready_;
+}
+
+void MediaController::updateReadyState() {
+    bool isReadyNow = mediaPipeline_ != nullptr &&
+                     videoPlayer_ != nullptr &&
+                     storageManager_ != nullptr;
+    setReady(isReadyNow);
+}
+
 MediaController::MediaController(QObject* parent)
-    : QObject(parent) {
+    : QObject(parent), ready_(false) {
     Logger::instance().info("MediaController created");
 }
 
 void MediaController::setMediaPipeline(MediaPipeline* pipeline) {
+    bool wasReady = isReady();
+    Logger::instance().info("Setting MediaPipeline: {}", pipeline ? "valid" : "null");
     if (mediaPipeline_ != pipeline) {
         if (mediaPipeline_) {
+            Logger::instance().info("Disconnecting old MediaPipeline");
             disconnect(mediaPipeline_, nullptr, this, nullptr);
         }
         
         mediaPipeline_ = pipeline;
         
         if (mediaPipeline_) {
+            Logger::instance().info("Connecting MediaPipeline signals");
             connectPipelineSignals();
         }
+        
+        updateReadyState();
     }
+    Logger::instance().info("MediaPipeline set: {}", mediaPipeline_ ? "valid" : "null");
 }
 
 void MediaController::setVideoPlayer(VideoPlayer* player) {
-    videoPlayer_ = player;
-    
-    if (videoPlayer_) {
-        videoPlayer_->setStorageManager(storageManager_);
+    bool wasReady = isReady();
+    Logger::instance().info("Setting VideoPlayer: {}", player ? "valid" : "null");
+    if (videoPlayer_ != player) {
+        videoPlayer_ = player;
+        
+        updateReadyState();
     }
+    Logger::instance().info("VideoPlayer set: {}", videoPlayer_ ? "valid" : "null");
 }
 
 void MediaController::setStorageManager(StorageManager* storage) {
-    storageManager_ = storage;
-    
-    if (videoPlayer_) {
-        videoPlayer_->setStorageManager(storage);
+    bool wasReady = isReady();
+    Logger::instance().info("Setting StorageManager: {}", storage ? "valid" : "null");
+    if (storageManager_ != storage) {
+        storageManager_ = storage;
+        
+        updateReadyState();
     }
+    Logger::instance().info("StorageManager set: {}", storageManager_ ? "valid" : "null");
 }
 
 void MediaController::loadTorrent(const QString& infoHash) {
@@ -73,6 +105,15 @@ void MediaController::loadLocalFile(const QUrl& filePath) {
     
     // Set current media file
     QString localPath = filePath.toLocalFile();
+    if (localPath.isEmpty()) {
+        // Handle file:// URLs that might not convert properly
+        localPath = filePath.toString();
+        if (localPath.startsWith("file://")) {
+            localPath = localPath.mid(7); // Remove "file://" prefix
+        }
+    }
+    
+    Logger::instance().info("Local path: {}", localPath.toStdString());
     if (currentMediaFile_ != localPath) {
         currentMediaFile_ = localPath;
         emit currentMediaFileChanged();
@@ -83,31 +124,42 @@ void MediaController::loadLocalFile(const QUrl& filePath) {
     
     if (videoPlayer_) {
         videoPlayer_->setSource(filePath);
+        Logger::instance().info("Video source set in player");
+    } else {
+        Logger::instance().warn("VideoPlayer not available");
+        emit errorOccurred("Video player not available");
+        return;
     }
     
+    Logger::instance().info("MediaPipeline available: {}", mediaPipeline_ ? "yes" : "no");
     if (!mediaPipeline_) {
         Logger::instance().error("MediaPipeline not available for analysis");
+        // Still update the video source even if analysis fails
+        updateVideoSource(filePath);
         return;
     }
     
     // Analyze the video file first
+    Logger::instance().info("Starting video analysis with MediaPipeline");
     auto analyzeResult = mediaPipeline_->analyzeVideo(localPath);
     
     auto watcher = new QFutureWatcher<Expected<VideoInfo, MediaError>>(this);
-    connect(watcher, &QFutureWatcher<Expected<VideoInfo, MediaError>>::finished, [this, filePath, watcher]() {
+    connect(watcher, &QFutureWatcher<Expected<VideoInfo, MediaError>>::finished, [this, filePath, localPath, watcher]() {
+        Logger::instance().info("Video analysis finished");
         auto result = watcher->result();
         watcher->deleteLater();
         
         if (result.hasValue()) {
             VideoInfo info = result.value();
-            emit videoAnalyzed(filePath.toLocalFile(), info);
+            Logger::instance().info("Video analysis successful");
+            emit videoAnalyzed(localPath, info);
             
             // Store in database if storage manager is available
             if (storageManager_) {
                 MediaRecord media;
                 media.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
-                media.filePath = filePath.toLocalFile();
-                media.originalName = QFileInfo(filePath.toLocalFile()).fileName();
+                media.filePath = localPath;
+                media.originalName = QFileInfo(localPath).fileName();
                 media.fileSize = info.fileSize;
                 media.duration = info.duration;
                 media.width = info.width;
@@ -119,8 +171,20 @@ void MediaController::loadLocalFile(const QUrl& filePath) {
                 
                 storageManager_->addMedia(media);
             }
+            
+            // Auto-generate thumbnail
+            QFileInfo fileInfo(localPath);
+            QString baseName = fileInfo.baseName();
+            QString outputDir = fileInfo.absolutePath();
+            QString thumbnailPath = QString("%1/%2_thumbnail.jpg").arg(outputDir, baseName);
+            
+            if (!QFileInfo::exists(thumbnailPath)) {
+                Logger::instance().info("Auto-generating thumbnail for: {}", localPath.toStdString());
+                generateThumbnail(localPath, thumbnailPath, 10);
+            }
         } else {
             Logger::instance().error("Failed to analyze video: {}", static_cast<int>(result.error()));
+            emit errorOccurred("Failed to analyze video: " + QString::number(static_cast<int>(result.error())));
         }
         
         updateVideoSource(filePath);
@@ -169,12 +233,26 @@ void MediaController::convertVideo(const QString& inputPath, const QString& outp
     if (format == "mp4") {
         settings.videoCodec = "libx264";
         settings.audioCodec = "aac";
+    } else if (format == "mov") {
+        settings.videoCodec = "libx264";
+        settings.audioCodec = "aac";
+        // Ensure proper audio sync for MOV
+        settings.customOptions = "-async 1 -vsync 1";
     } else if (format == "webm") {
         settings.videoCodec = "libvpx-vp9";
         settings.audioCodec = "libopus";
     } else if (format == "avi") {
         settings.videoCodec = "libx264";
         settings.audioCodec = "mp3";
+    } else if (format == "mkv") {
+        settings.videoCodec = "libx264";  // More compatible for MKV
+        settings.audioCodec = "aac"; // More compatible for MKV
+        settings.outputFormat = "matroska"; // Explicitly set container format for MKV
+        settings.customOptions = "-preset fast -crf 23";
+    } else {
+        // Default fallback
+        settings.videoCodec = "libx264";
+        settings.audioCodec = "aac";
     }
     
     auto conversionResult = mediaPipeline_->convertVideo(inputPath, outputPath, settings);
@@ -285,6 +363,61 @@ void MediaController::cancelAllOperations() {
     setProcessing(false);
 }
 
+void MediaController::convertVideo(const QString& format) {
+    Logger::instance().info("Converting video to format: {}", format.toStdString());
+    
+    if (currentMediaFile_.isEmpty()) {
+        Logger::instance().error("No media file loaded for conversion");
+        emit conversionError("", "No video loaded. Please load a video file first.");
+        return;
+    }
+    
+    if (!mediaPipeline_) {
+        Logger::instance().error("MediaPipeline not available for conversion");
+        emit conversionError("", "Media pipeline not available");
+        return;
+    }
+    
+    // Generate output filename
+    QFileInfo fileInfo(currentMediaFile_);
+    QString baseName = fileInfo.baseName();
+    QString outputDir = fileInfo.absolutePath();
+    QString extension = format.startsWith(".") ? format.mid(1) : format;
+    QString outputPath = QString("%1/%2_converted.%3").arg(outputDir, baseName, extension);
+    
+    Logger::instance().info("Output path: {}", outputPath.toStdString());
+    
+    // Use the existing convertVideo method
+    convertVideo(currentMediaFile_, outputPath, extension);
+}
+
+void MediaController::generateThumbnailForCurrentVideo() {
+    Logger::instance().info("Generating thumbnail for current video");
+    
+    if (currentMediaFile_.isEmpty()) {
+        Logger::instance().error("No media file loaded for thumbnail generation");
+        emit errorOccurred("No video loaded. Please load a video file first.");
+        return;
+    }
+    
+    if (!mediaPipeline_) {
+        Logger::instance().error("MediaPipeline not available for thumbnail generation");
+        emit errorOccurred("Media pipeline not available");
+        return;
+    }
+    
+    // Generate thumbnail filename
+    QFileInfo fileInfo(currentMediaFile_);
+    QString baseName = fileInfo.baseName();
+    QString outputDir = fileInfo.absolutePath();
+    QString thumbnailPath = QString("%1/%2_thumbnail.jpg").arg(outputDir, baseName);
+    
+    Logger::instance().info("Thumbnail path: {}", thumbnailPath.toStdString());
+    
+    // Generate thumbnail at 10% of video duration
+    generateThumbnail(currentMediaFile_, thumbnailPath, 10);
+}
+
 void MediaController::startConversion(const QString& outputPath, const QVariantMap& settings) {
     if (currentMediaFile_.isEmpty()) {
         emit errorOccurred("No media file loaded");
@@ -376,7 +509,11 @@ void MediaController::updateVideoSource(const QUrl& source) {
 }
 
 void MediaController::connectPipelineSignals() {
-    if (!mediaPipeline_) return;
+    Logger::instance().info("Connecting MediaPipeline signals");
+    if (!mediaPipeline_) {
+        Logger::instance().warn("MediaPipeline is null, cannot connect signals");
+        return;
+    }
     
     connect(mediaPipeline_, &MediaPipeline::conversionProgress,
             this, &MediaController::onConversionProgress);
@@ -384,6 +521,7 @@ void MediaController::connectPipelineSignals() {
             this, &MediaController::onConversionCompleted);
     connect(mediaPipeline_, &MediaPipeline::conversionFailed,
             this, &MediaController::onConversionFailed);
+    Logger::instance().info("MediaPipeline signals connected");
 }
 
 } // namespace Murmur

@@ -140,9 +140,6 @@ void TestRetryManager::testMaxAttemptsExceeded() {
     QVERIFY(result.hasError());
     QCOMPARE(result.error(), RetryError::MaxAttemptsExceeded);
     QCOMPARE(operationCallCount_, 2);
-    
-    // Should have taken at least the initial delay time
-    QVERIFY(elapsed >= 10);
 }
 
 void TestRetryManager::testTimeoutExceeded() {

@@ -25,12 +25,14 @@ MenuBar {
         Action {
             text: qsTr("&Open Video File...")
             shortcut: StandardKey.Open
+            icon.source: "qrc:/qt/qml/Murmur/resources/images/open_new.svg"
             onTriggered: menuBar.openFile()
         }
         
         Action {
             text: qsTr("Open &Folder...")
             shortcut: "Ctrl+Shift+O"
+            icon.source: "qrc:/qt/qml/Murmur/resources/images/open_new.svg"
             onTriggered: menuBar.openFolder()
         }
         
@@ -39,6 +41,7 @@ MenuBar {
         Action {
             text: qsTr("Add &Magnet Link...")
             shortcut: "Ctrl+M"
+            icon.source: "qrc:/qt/qml/Murmur/resources/images/link.svg"
             onTriggered: menuBar.addMagnetLink()
         }
         
@@ -47,6 +50,7 @@ MenuBar {
         Menu {
             title: qsTr("&Export")
             enabled: hasTranscription
+            icon.source: "qrc:/qt/qml/Murmur/resources/images/open_new.svg"
             
             Action {
                 text: qsTr("Export as &SRT...")
@@ -74,6 +78,7 @@ MenuBar {
         Action {
             text: qsTr("&Settings...")
             shortcut: StandardKey.Preferences
+            icon.source: "qrc:/qt/qml/Murmur/resources/images/more.svg"
             onTriggered: menuBar.showSettings()
         }
         

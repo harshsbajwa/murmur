@@ -1,0 +1,310 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  QT_VERSION: '6.8.3'
+  CONAN_VERSION: '2.0'
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+    strategy:
+      matrix:
+        arch: [x86_64]
+        build_type: [Release]
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install Qt
+      uses: jurplel/install-qt-action@v3
+      with:
+        version: ${{ env.QT_VERSION }}
+        arch: win64_msvc2022_64
+        cache: true
+    
+    - name: Install Conan
+      run: |
+        pip install conan~=${{ env.CONAN_VERSION }}
+        conan profile detect --force
+    
+    - name: Cache Conan packages
+      uses: actions/cache@v3
+      with:
+        path: ~/.conan2
+        key: conan-windows-${{ matrix.arch }}-${{ hashFiles('conanfile.py') }}
+        restore-keys: |
+          conan-windows-${{ matrix.arch }}-
+    
+    - name: Set up MSVC
+      uses: microsoft/setup-msbuild@v1
+    
+    - name: Build Application
+      run: |
+        python scripts/build.py --target-os windows --arch ${{ matrix.arch }} --build-type ${{ matrix.build_type }} --clean --package
+    
+    - name: Create Self-Signed Certificate and Sign Installer
+      if: startsWith(github.ref, 'refs/tags/v')
+      shell: pwsh
+      run: |
+        $InstallerPath = (Get-ChildItem -Path "build/windows-x86_64-Release" -Filter "*.exe").FullName
+        
+        $cert = New-SelfSignedCertificate -Subject "CN=Murmur Desktop Self-Signed" -CertStoreLocation Cert:\CurrentUser\My -KeyExportPolicy Exportable -KeySpec Signature -KeyLength 2048 -KeyAlgorithm RSA -HashAlgorithm SHA256
+
+        $signToolPath = (Get-ChildItem -Path "${{env.ProgramFiles(x86)}}\Windows Kits\10\bin" -Filter "signtool.exe" -Recurse | Sort-Object -Property LastWriteTime -Descending | Select-Object -First 1).FullName
+        
+        & $signToolPath sign /v /fd SHA256 /a /n "Murmur Desktop Self-Signed" /t http://timestamp.digicert.com $InstallerPath
+
+    - name: Upload Build Artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: murmur-desktop-windows-${{ matrix.arch }}
+        path: |
+          build/windows-${{ matrix.arch }}-${{ matrix.build_type }}/*.exe
+          build/windows-${{ matrix.arch }}-${{ matrix.build_type }}/*.msi
+        retention-days: 30
+
+  build-macos:
+    runs-on: macos-14
+    strategy:
+      matrix:
+        arch: [x86_64]
+        build_type: [Release]
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install Qt
+      uses: jurplel/install-qt-action@v3
+      with:
+        version: ${{ env.QT_VERSION }}
+        arch: clang_64
+        cache: true
+    
+    - name: Install Conan
+      run: |
+        pip install conan~=${{ env.CONAN_VERSION }}
+        conan profile detect --force
+
+    - name: Cache Conan packages
+      uses: actions/cache@v3
+      with:
+        path: ~/.conan2
+        key: conan-macos-universal-${{ hashFiles('conanfile.py') }}
+        restore-keys: |
+          conan-macos-universal-
+    
+    - name: Build Universal Application
+      run: |
+        python3 scripts/build.py --target-os macos --build-type Release --clean --package
+    
+    - name: Create Self-Signed Certificate and Sign DMG
+      if: startsWith(github.ref, 'refs/tags/v')
+      run: |
+        # Path to the built DMG
+        DMG_PATH=$(find build/macos-x86_64-Release -name "*.dmg" | head -n 1)
+        
+        security create-keychain -p "temp_password" build.keychain
+        security default-keychain -s build.keychain
+        security unlock-keychain -p "temp_password" build.keychain
+        
+        security create-certificate -s "Murmur Desktop Self-Signed" -r -p build.keychain
+        
+        echo "Signing $DMG_PATH..."
+        codesign --force --sign "Murmur Desktop Self-Signed" "$DMG_PATH"
+
+    - name: Upload Build Artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: murmur-desktop-macos-universal
+        path: build/macos-x86_64-Release/*.dmg
+        retention-days: 30
+  
+  build-linux:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        arch: [x86_64]
+        build_type: [Release]
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential cmake ninja-build \
+          libasound2-dev libpulse-dev libjack-dev \
+          libxkbcommon-dev libxcb-xinerama0-dev \
+          libglu1-mesa-dev libdrm-dev \
+          libva-dev libvdpau-dev \
+          rpm fuse3 \
+          qt6-base-dev qt6-declarative-dev qt6-multimedia-dev qt6-tools-dev
+    
+    - name: Install Qt
+      uses: jurplel/install-qt-action@v3
+      with:
+        version: ${{ env.QT_VERSION }}
+        cache: true
+    
+    - name: Install Conan
+      run: |
+        pip install conan==${{ env.CONAN_VERSION }}
+        conan profile detect --force
+    
+    - name: Cache Conan packages
+      uses: actions/cache@v3
+      with:
+        path: ~/.conan2
+        key: conan-linux-${{ matrix.arch }}-${{ hashFiles('conanfile.py') }}
+        restore-keys: |
+          conan-linux-${{ matrix.arch }}-
+    
+    - name: Install AppImage tools
+      run: |
+        wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+        chmod +x linuxdeploy-x86_64.AppImage
+        sudo mv linuxdeploy-x86_64.AppImage /usr/local/bin/linuxdeploy
+    
+    - name: Build Application
+      run: |
+        python scripts/build.py --target-os linux --arch ${{ matrix.arch }} --build-type ${{ matrix.build_type }} --clean --package
+    
+    - name: Upload Build Artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: murmur-desktop-linux-${{ matrix.arch }}
+        path: |
+          build/linux-${{ matrix.arch }}-${{ matrix.build_type }}/packages/*.deb
+          build/linux-${{ matrix.arch }}-${{ matrix.build_type }}/packages/*.rpm
+          build/linux-${{ matrix.arch }}-${{ matrix.build_type }}/*.AppImage
+        retention-days: 30
+
+  test:
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'pull_request'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential cmake \
+          qt6-base-dev qt6-declarative-dev qt6-multimedia-dev
+    
+    - name: Install Qt
+      uses: jurplel/install-qt-action@v3
+      with:
+        version: ${{ env.QT_VERSION }}
+        cache: true
+    
+    - name: Install Conan
+      run: |
+        pip install conan==${{ env.CONAN_VERSION }}
+        conan profile detect --force
+    
+    - name: Run Tests
+      run: |
+        python scripts/build.py --target-os linux --arch x86_64 --build-type Debug --clean --test
+
+  release:
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+    
+    - name: Prepare release assets
+      run: |
+        mkdir -p release
+        
+        # Windows
+        cp murmur-desktop-windows-x86_64/*.exe release/ || true
+        cp murmur-desktop-windows-x86_64/*.msi release/ || true
+        
+        # macOS (Universal)
+        cp murmur-desktop-macos-universal/*.dmg release/MurmurDesktop-macOS-Universal.dmg || true
+        
+        # Linux
+        cp murmur-desktop-linux-x86_64/*.deb release/ || true
+        cp murmur-desktop-linux-x86_64/*.rpm release/ || true
+        cp murmur-desktop-linux-x86_64/*.AppImage release/ || true
+        
+        ls -la release/
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        name: Murmur Desktop ${{ github.ref_name }}
+        body: |
+          ## What's New
+          
+          See [CHANGELOG.md](CHANGELOG.md) for detailed changes.
+          
+          ## Downloads
+          
+          ### Windows
+          - **Installer (Recommended)**: `MurmurDesktop-*-Setup.exe`
+          
+          ### macOS
+          - **Intel Macs**: `MurmurDesktop-macOS-Intel.dmg`
+          - **Apple Silicon Macs**: `MurmurDesktop-macOS-Apple-Silicon.dmg`
+          
+          ### Linux
+          - **Ubuntu/Debian**: `*.deb`
+          - **Fedora/RHEL/CentOS**: `*.rpm`
+          - **AppImage (Universal)**: `*.AppImage`
+          
+          ## System Requirements
+          
+          - **Windows**: Windows 10 or later (64-bit)
+          - **macOS**: macOS 11.0 or later
+          - **Linux**: Ubuntu 20.04+ or equivalent
+          
+          ## Verification
+          
+          All binaries are signed and can be verified for authenticity.
+        files: release/*
+        draft: false
+        prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

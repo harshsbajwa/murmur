@@ -10,6 +10,7 @@
 #include <QDebug>
 
 #include <whisper.h>
+#include <atomic>
 #include <algorithm>
 #include <cstring>
 #include <fstream>
@@ -20,6 +21,7 @@ namespace Murmur {
 struct WhisperWrapper::WhisperWrapperPrivate {
     whisper_context* ctx = nullptr;
     bool isInitialized = false;
+    std::atomic<bool> isCancelled = false;
     QString loadedModelPath;
     
     // Progress callback data
@@ -161,6 +163,10 @@ void WhisperWrapper::unloadModel() {
     }
 }
 
+void WhisperWrapper::requestCancel() {
+    d->isCancelled.store(true);
+}
+
 Expected<WhisperResult, WhisperError> WhisperWrapper::transcribe(
     const std::vector<float>& audioData,
     const WhisperConfig& config,
@@ -187,6 +193,7 @@ Expected<WhisperResult, WhisperError> WhisperWrapper::transcribe(
     // Set up progress callback
     d->progressCallback = progressCallback;
     d->lastProgress = -1;
+    d->isCancelled.store(false);
 
     // Initialize whisper parameters
     whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH);
@@ -195,17 +202,35 @@ Expected<WhisperResult, WhisperError> WhisperWrapper::transcribe(
         return makeUnexpected(paramResult.error());
     }
 
-    // Set progress callback if provided
-    if (progressCallback) {
-        params.progress_callback = progressCallbackWrapper;
+    // Report progress
+    if (d->progressCallback) {
+        params.progress_callback = [](struct whisper_context* /*ctx*/, struct whisper_state* /*state*/, int progress, void* user_data) {
+            auto* wrapper = static_cast<WhisperWrapper*>(user_data);
+            if (progress != wrapper->d->lastProgress) {
+                wrapper->d->progressCallback(progress);
+                wrapper->d->lastProgress = progress;
+            }
+        };
         params.progress_callback_user_data = this;
     }
+
+    // Check for cancel before each encoder run
+    params.encoder_begin_callback = [](struct whisper_context* /*ctx*/, struct whisper_state* /*state*/, void* user_data) -> bool {
+        auto* wrapper = static_cast<WhisperWrapper*>(user_data);
+        return !wrapper->d->isCancelled.load(); // Return `false` to continue, `true` to abort.
+    };
+    params.encoder_begin_callback_user_data = this;
 
     // Run transcription
     Logger::instance().info("Starting transcription of {} samples", audioData.size());
     
     int result = whisper_full(d->ctx, params, audioData.data(), static_cast<int>(audioData.size()));
-    
+
+    // Check cancellation flag first
+    if (d->isCancelled.load()) {
+        Logger::instance().info("Transcription was cancelled by user request.");
+        return makeUnexpected(WhisperError::Cancelled);
+    } 
     if (result != 0) {
         QString errorMsg = translateWhisperError(result);
         Logger::instance().error("Transcription failed: {}", errorMsg.toStdString());
@@ -349,9 +374,7 @@ Expected<std::vector<float>, WhisperError> WhisperWrapper::loadWavFile(const QSt
     if (sampleRate != 16000) {
         Logger::instance().info("Resampling from {}Hz to 16kHz", sampleRate);
         
-        // Simple linear resampling 
-        // Note: For production use, consider using a dedicated resampling library like libsamplerate
-        // for better quality, but linear interpolation is sufficient for whisper.cpp
+        // TODO libsamplerate?
         double ratio = 16000.0 / sampleRate;
         std::vector<float> resampled;
         resampled.reserve(static_cast<size_t>(audioData.size() * ratio));

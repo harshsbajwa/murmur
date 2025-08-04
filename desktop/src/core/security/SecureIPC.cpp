@@ -380,7 +380,6 @@ Expected<void, IPCError> SecureIPC::authenticateClient(const QString& clientId, 
         return makeUnexpected(IPCError::ClientNotConnected);
     }
 
-    // Simple credential check (in a real implementation, this would be more sophisticated)
     if (credentials.isEmpty()) {
         emit authenticationFailed(clientId, "Empty credentials");
         return makeUnexpected(IPCError::AuthenticationFailed);

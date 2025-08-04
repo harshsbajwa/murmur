@@ -2,11 +2,15 @@
 
 #include <QtCore/QObject>
 #include <QtCore/QString>
+#include <QtCore/QVariantMap>
 #include <QtCore/QUrl>
-#include <QFuture>
+#include <QtCore/QFuture>
+#include <memory>
+#include "../../core/common/Expected.hpp"
 #include "../../core/media/MediaPipeline.hpp"
 #include "../../core/media/VideoPlayer.hpp"
 #include "../../core/storage/StorageManager.hpp"
+#include "../../core/common/Logger.hpp"
 
 namespace Murmur {
 
@@ -17,12 +21,16 @@ class MediaController : public QObject {
     Q_PROPERTY(bool isProcessing READ isProcessing NOTIFY processingChanged)
     Q_PROPERTY(QString currentMediaFile READ currentMediaFile NOTIFY currentMediaFileChanged)
     Q_PROPERTY(QString outputPath READ outputPath NOTIFY outputPathChanged)
+    Q_PROPERTY(bool isReady READ isReady NOTIFY readyChanged)
     
 public:
-    explicit MediaController(QObject* parent = nullptr);
-    
-    // Setters for dependencies
-    Q_INVOKABLE void setMediaPipeline(MediaPipeline* pipeline);
+explicit MediaController(QObject* parent = nullptr);
+
+void setReady(bool ready);
+void updateReadyState();
+
+// Setters for dependencies
+Q_INVOKABLE void setMediaPipeline(MediaPipeline* pipeline);
     Q_INVOKABLE void setVideoPlayer(VideoPlayer* player);
     Q_INVOKABLE void setStorageManager(StorageManager* storage);
     
@@ -31,7 +39,7 @@ public:
     bool isProcessing() const { return isProcessing_; }
     QString currentMediaFile() const { return currentMediaFile_; }
     QString outputPath() const { return outputPath_; }
-    bool isReady() const { return mediaPipeline_ != nullptr; }
+bool isReady() const;
     
 public slots:
     void loadTorrent(const QString& infoHash);
@@ -43,6 +51,10 @@ public slots:
     void cancelOperation(const QString& operationId);
     void cancelOperation(); // Cancel current operation
     void cancelAllOperations();
+    
+    // QML-friendly conversion method
+    Q_INVOKABLE void convertVideo(const QString& format);
+    Q_INVOKABLE void generateThumbnailForCurrentVideo();
     
     // Additional methods for UI integration
     void startConversion(const QString& outputPath, const QVariantMap& settings = {});
@@ -57,6 +69,7 @@ signals:
     void processingChanged();
     void currentMediaFileChanged();
     void outputPathChanged();
+    void readyChanged();
     void conversionProgress(const QString& operationId, qreal progress);
     void conversionCompleted(const QString& operationId, const QString& outputPath);
     void conversionError(const QString& operationId, const QString& error);
@@ -81,13 +94,15 @@ private:
     QString currentMediaFile_;
     QString outputPath_;
     
-    MediaPipeline* mediaPipeline_ = nullptr;
-    VideoPlayer* videoPlayer_ = nullptr;
-    StorageManager* storageManager_ = nullptr;
-    
+MediaPipeline* mediaPipeline_ = nullptr;
+VideoPlayer* videoPlayer_ = nullptr;
+StorageManager* storageManager_ = nullptr;
+
+bool ready_ = false;
+
     QHash<QString, QFuture<void>> activeOperations_;
-    QVariantMap conversionSettings_;
-    QString currentOperationId_;
+QVariantMap conversionSettings_;
+QString currentOperationId_;
     
     void setProcessing(bool processing);
     void updateVideoSource(const QUrl& source);

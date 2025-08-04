@@ -7,8 +7,24 @@
 namespace Murmur {
 
 TorrentController::TorrentController(QObject* parent)
-    : QObject(parent)
-{
+    : QObject(parent), ready_(false) {
+}
+
+void TorrentController::setReady(bool ready) {
+    if (ready_ != ready) {
+        ready_ = ready;
+        Logger::instance().debug("TorrentController ready state changed to: {}", ready ? "true" : "false");
+        emit readyChanged();
+    }
+}
+
+bool TorrentController::isReady() const {
+    return ready_;
+}
+
+void TorrentController::updateReadyState() {
+    bool isReadyNow = torrentEngine_ != nullptr;
+    setReady(isReadyNow);
 }
 
 TorrentStateModel* TorrentController::torrentModel() const {
@@ -48,12 +64,35 @@ void TorrentController::setTorrentEngine(TorrentEngine* engine) {
                 connect(model, &TorrentStateModel::torrentCountChanged,
                         this, &TorrentController::handleModelCountChanged);
             }
-        }
+            
+        Logger::instance().info("TorrentEngine connected successfully");
+    } else {
+        Logger::instance().warn("TorrentEngine set to null");
     }
+    
+    updateReadyState();
+    emit busyChanged(); // Emit signal to update UI
+    emit torrentModelChanged(); // Notify QML that the model has changed
+}
 }
 
 void TorrentController::addTorrent(const QString& magnetUri) {
-    if (!torrentEngine_ || isBusy_) {
+    if (!torrentEngine_) {
+        Logger::instance().warn("Torrent engine not available");
+        emit torrentError("", "Torrent engine not available");
+        return;
+    }
+    
+    if (magnetUri.isEmpty()) {
+        Logger::instance().warn("Magnet URI is empty");
+        emit torrentError("", "Magnet URI is empty");
+        return;
+    }
+    
+    // Validate magnet URI format
+    if (!magnetUri.startsWith("magnet:?")) {
+        Logger::instance().warn("Invalid magnet URI format: {}", magnetUri.toStdString());
+        emit torrentError("", "Invalid magnet URI format");
         return;
     }
     
@@ -61,16 +100,33 @@ void TorrentController::addTorrent(const QString& magnetUri) {
     
     setBusy(true);
     auto future = torrentEngine_->addTorrent(magnetUri);
-    handleAsyncOperation(future, "add torrent");
+    handleAsyncOperation(future, "add torrent: " + magnetUri);
 }
 
 void TorrentController::addTorrentFromFile(const QUrl& torrentFile) {
-    if (!torrentEngine_ || isBusy_) {
+    if (!torrentEngine_) {
+        Logger::instance().warn("Torrent engine not available");
+        emit torrentError("", "Torrent engine not available");
         return;
     }
     
     QString localPath = torrentFile.toLocalFile();
+    if (localPath.isEmpty()) {
+        // Try to get the path directly from QUrl if toLocalFile() fails
+        localPath = torrentFile.path();
+    }
+    
+    // Handle file:// prefix if present
+    if (localPath.startsWith("file://")) {
+        localPath = localPath.mid(7); // Remove "file://" prefix
+    }
+    
     QFileInfo fileInfo(localPath);
+    
+    if (localPath.isEmpty()) {
+        emit torrentError("", "Invalid torrent file path");
+        return;
+    }
     
     if (!fileInfo.exists()) {
         emit torrentError("", "Torrent file does not exist: " + localPath);
@@ -82,8 +138,9 @@ void TorrentController::addTorrentFromFile(const QUrl& torrentFile) {
         return;
     }
     
-    setBusy(true);
+    Logger::instance().info("Adding torrent from file: {}", localPath.toStdString());
     
+    setBusy(true);
     auto future = torrentEngine_->addTorrentFromFile(localPath);
     handleAsyncOperation(future, "Adding torrent from file: " + fileInfo.fileName());
 }
@@ -191,6 +248,13 @@ void TorrentController::configureSession(int maxConnections, int uploadRate, int
 
 void TorrentController::handleTorrentAdded(const QString& infoHash) {
     setBusy(false);
+    
+    // Force model refresh
+    if (auto model = torrentModel()) {
+        emit model->layoutChanged(); // Force ListView update
+    }
+    
+    emit torrentModelChanged();
     emit torrentAdded(infoHash);
     emit operationCompleted("Torrent added successfully");
 }

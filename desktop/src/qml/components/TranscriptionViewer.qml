@@ -6,7 +6,7 @@ import Murmur 1.0
 Rectangle {
     id: transcriptionViewer
     
-    property alias transcription: transcriptionText.text
+    property var transcription: null
     property var segments: []
     property int currentPosition: 0
     property bool autoScroll: true
@@ -19,71 +19,89 @@ Rectangle {
     color: palette.base
     border.color: palette.mid
     border.width: 1
+    radius: 8
     
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 8
-        spacing: 8
+        anchors.margins: 12
+        spacing: 12
         
-        // Header with controls
-        RowLayout {
+        // Header with controls - split into two rows for better spacing
+        ColumnLayout {
             Layout.fillWidth: true
-            spacing: 8
+            spacing: 6
             
-            Text {
-                text: qsTr("Transcription")
-                font.bold: true
-                font.pointSize: 12
-                color: palette.windowText
-            }
-            
-            Item {
+            RowLayout {
                 Layout.fillWidth: true
-            }
-            
-            // Auto-scroll toggle
-            CheckBox {
-                id: autoScrollCheck
-                text: qsTr("Auto-scroll")
-                checked: autoScroll
-                onCheckedChanged: autoScroll = checked
-            }
-            
-            // Show timestamps toggle
-            CheckBox {
-                id: timestampsCheck
-                text: qsTr("Timestamps")
-                checked: showTimestamps
-                onCheckedChanged: showTimestamps = checked
-            }
-            
-            // Export button
-            Button {
-                text: qsTr("Export")
-                onClicked: exportMenu.open()
+                spacing: 12
                 
-                Menu {
-                    id: exportMenu
+                Text {
+                    text: qsTr("Transcription")
+                    font.bold: true
+                    font.pointSize: 14
+                    color: palette.windowText
+                }
+                
+                Item {
+                    Layout.fillWidth: true
+                }
+                
+                // Export button
+                Button {
+                    text: qsTr("Export")
+                    icon.source: "qrc:/qt/qml/Murmur/resources/images/open_new.svg"
+                    onClicked: exportMenu.open()
+                    Layout.preferredWidth: 100
                     
-                    MenuItem {
-                        text: qsTr("Export as TXT")
-                        onTriggered: transcriptionViewer.exportRequested("txt")
+                    Menu {
+                        id: exportMenu
+                        
+                        MenuItem {
+                            text: qsTr("Export as TXT")
+                            onTriggered: transcriptionViewer.exportRequested("txt")
+                        }
+                        
+                        MenuItem {
+                            text: qsTr("Export as SRT")
+                            onTriggered: transcriptionViewer.exportRequested("srt")
+                        }
+                        
+                        MenuItem {
+                            text: qsTr("Export as VTT")
+                            onTriggered: transcriptionViewer.exportRequested("vtt")
+                        }
+                        
+                        MenuItem {
+                            text: qsTr("Export as JSON")
+                            onTriggered: transcriptionViewer.exportRequested("json")
+                        }
                     }
-                    
-                    MenuItem {
-                        text: qsTr("Export as SRT")
-                        onTriggered: transcriptionViewer.exportRequested("srt")
-                    }
-                    
-                    MenuItem {
-                        text: qsTr("Export as VTT")
-                        onTriggered: transcriptionViewer.exportRequested("vtt")
-                    }
-                    
-                    MenuItem {
-                        text: qsTr("Export as JSON")
-                        onTriggered: transcriptionViewer.exportRequested("json")
-                    }
+                }
+            }
+            
+            // Controls row
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 16
+                
+                // Auto-scroll toggle
+                CheckBox {
+                    id: autoScrollCheck
+                    text: qsTr("Auto-scroll")
+                    checked: autoScroll
+                    onCheckedChanged: autoScroll = checked
+                }
+                
+                // Show timestamps toggle
+                CheckBox {
+                    id: timestampsCheck
+                    text: qsTr("Timestamps")
+                    checked: showTimestamps
+                    onCheckedChanged: showTimestamps = checked
+                }
+                
+                Item {
+                    Layout.fillWidth: true
                 }
             }
         }
@@ -92,10 +110,12 @@ Rectangle {
         RowLayout {
             Layout.fillWidth: true
             spacing: 8
+            visible: segments.length > 0 || (transcription && transcription.length > 0)
             
             TextField {
                 id: searchField
                 Layout.fillWidth: true
+                Layout.minimumWidth: 200
                 placeholderText: qsTr("Search transcription...")
                 onTextChanged: {
                     if (text.length > 0) {
@@ -116,6 +136,8 @@ Rectangle {
                 onClicked: findPrevious()
                 ToolTip.text: qsTr("Find Previous")
                 ToolTip.visible: hovered
+                Layout.preferredWidth: 32
+                Layout.preferredHeight: 32
             }
             
             Button {
@@ -124,11 +146,14 @@ Rectangle {
                 onClicked: findNext()
                 ToolTip.text: qsTr("Find Next")
                 ToolTip.visible: hovered
+                Layout.preferredWidth: 32
+                Layout.preferredHeight: 32
             }
         }
         
         // Transcription content
         ScrollView {
+            id: contentScrollView
             Layout.fillWidth: true
             Layout.fillHeight: true
             
@@ -143,7 +168,7 @@ Rectangle {
                 Column {
                     id: transcriptionColumn
                     width: transcriptionFlickable.width
-                    spacing: 4
+                    spacing: 6
                     
                     // Segment-based display
                     Repeater {
@@ -152,9 +177,9 @@ Rectangle {
                         
                         delegate: Rectangle {
                             width: parent.width
-                            height: segmentText.height + 16
+                            height: Math.max(segmentLayout.implicitHeight + 16, 48)
                             color: isCurrentSegment() ? palette.highlight : "transparent"
-                            radius: 4
+                            radius: 6
                             
                             function isCurrentSegment() {
                                 if (!highlightCurrent || !modelData) return false
@@ -176,6 +201,7 @@ Rectangle {
                             }
                             
                             RowLayout {
+                                id: segmentLayout
                                 anchors.fill: parent
                                 anchors.margins: 8
                                 spacing: 12
@@ -187,26 +213,31 @@ Rectangle {
                                     font.pointSize: 10
                                     font.family: "monospace"
                                     visible: showTimestamps
-                                    Layout.minimumWidth: 60
+                                    Layout.preferredWidth: 65
+                                    Layout.alignment: Qt.AlignTop
                                 }
                                 
                                 // Segment text
                                 Text {
                                     id: segmentText
                                     Layout.fillWidth: true
+                                    Layout.alignment: Qt.AlignTop
                                     text: modelData ? modelData.text : ""
                                     color: parent.parent.isCurrentSegment() ? palette.highlightedText : palette.windowText
                                     font.pointSize: 11
                                     wrapMode: Text.WordWrap
+                                    lineHeight: 1.2
                                 }
                                 
                                 // Confidence indicator
                                 Rectangle {
-                                    width: 8
-                                    height: 8
-                                    radius: 4
+                                    width: 10
+                                    height: 10
+                                    radius: 5
                                     color: getConfidenceColor(modelData ? modelData.confidence : 0)
                                     visible: modelData && modelData.confidence !== undefined
+                                    Layout.alignment: Qt.AlignTop
+                                    Layout.topMargin: 4
                                     
                                     ToolTip.text: qsTr("Confidence: %1%").arg(Math.round((modelData ? modelData.confidence : 0) * 100))
                                     ToolTip.visible: confidenceMouseArea.containsMouse
@@ -225,9 +256,10 @@ Rectangle {
                     Text {
                         id: transcriptionText
                         width: parent.width
-                        visible: segments.length === 0
+                        visible: segments.length === 0 && transcription && transcription.length > 0
+                        text: transcription || ""
                         color: palette.windowText
-                        font.pointSize: 11
+                        font.pointSize: 12
                         wrapMode: Text.WordWrap
                         
                         onTextChanged: {
@@ -236,6 +268,7 @@ Rectangle {
                             }
                         }
                     }
+                    
                 }
             }
         }
@@ -243,27 +276,28 @@ Rectangle {
         // Status bar
         Rectangle {
             Layout.fillWidth: true
-            height: 24
+            height: 30
             color: palette.window
             border.color: palette.mid
             border.width: 1
+            radius: 4
             visible: segments.length > 0 || transcriptionText.text.length > 0
             
             RowLayout {
                 anchors.fill: parent
-                anchors.margins: 4
+                anchors.margins: 6
                 
                 Text {
                     text: {
                         if (segments.length > 0) {
                             return qsTr("%1 segments").arg(segments.length)
-                        } else if (transcriptionText.text.length > 0) {
-                            return qsTr("%1 characters").arg(transcriptionText.text.length)
+                        } else if (transcription && typeof transcription === "string" && transcription.length > 0) {
+                            return qsTr("%1 characters").arg(transcription.length)
                         }
                         return ""
                     }
                     color: palette.windowText
-                    font.pointSize: 9
+                    font.pointSize: 10
                 }
                 
                 Item {
@@ -273,20 +307,20 @@ Rectangle {
                 Text {
                     text: getCurrentSegmentInfo()
                     color: palette.placeholderText
-                    font.pointSize: 9
+                    font.pointSize: 10
                     visible: highlightCurrent
                 }
             }
         }
     }
     
-    // Empty state
+    // Empty state overlay - positioned outside the column layout for proper centering
     Rectangle {
         anchors.centerIn: parent
-        width: Math.min(parent.width - 40, 300)
+        width: 300
         height: emptyColumn.height + 40
         color: "transparent"
-        visible: segments.length === 0 && transcriptionText.text.length === 0
+        visible: segments.length === 0 && (!transcription || (typeof transcription === "string" && transcription.length === 0))
         
         Column {
             id: emptyColumn
@@ -333,7 +367,7 @@ Rectangle {
         for (var i = 0; i < segments.length; i++) {
             var segment = segments[i]
             if (currentPosition >= segment.startTime && currentPosition <= segment.endTime) {
-                var segmentY = i * (segmentRepeater.itemAt(0) ? segmentRepeater.itemAt(0).height + 4 : 50)
+                var segmentY = i * (segmentRepeater.itemAt(0) ? segmentRepeater.itemAt(0).height + 6 : 56)
                 transcriptionFlickable.contentY = Math.max(0, segmentY - transcriptionFlickable.height / 2)
                 break
             }

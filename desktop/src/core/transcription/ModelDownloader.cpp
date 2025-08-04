@@ -70,99 +70,83 @@ ModelDownloader::~ModelDownloader() {
     Logger::instance().info("ModelDownloader destroyed");
 }
 
-QFuture<Expected<QString, DownloadError>> ModelDownloader::downloadFile(
+Expected<QString, DownloadError> ModelDownloader::downloadFile(
     const QString& url,
     const QString& localPath,
     const QString& expectedChecksum,
     bool enableResume) {
     
-    QPromise<Expected<QString, DownloadError>> promise;
-    auto future = promise.future();
+    Q_UNUSED(enableResume);
 
-    // Validate inputs
     auto urlValidation = validateUrl(url);
     if (urlValidation.hasError()) {
-        promise.addResult(makeUnexpected(urlValidation.error()));
-        promise.finish();
-        return future;
+        return makeUnexpected(urlValidation.error());
     }
     
     auto pathValidation = validateLocalPath(localPath);
     if (pathValidation.hasError()) {
-        promise.addResult(makeUnexpected(pathValidation.error()));
-        promise.finish();
-        return future;
+        return makeUnexpected(pathValidation.error());
     }
 
-    DownloadInfo info;
-    info.id = generateDownloadId();
-    info.url = url;
-    info.localPath = localPath;
-    info.tempPath = localPath + ".tmp";
-    info.expectedChecksum = expectedChecksum;
-    info.startTime = QDateTime::currentDateTime();
-    info.timer.start();
-    info.supportsResume = enableResume;
-    
-    auto prepareResult = prepareDownload(info);
-    if (prepareResult.hasError()) {
-        promise.addResult(makeUnexpected(prepareResult.error()));
-        promise.finish();
-        return future;
-    }
+    QString tempPath = localPath + ".tmp";
+    QNetworkRequest request(url);
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    request.setRawHeader("User-Agent", "MurmurDesktop/1.0");
 
-    QNetworkRequest request = buildRequest(info.url, info);
-    QNetworkReply* reply = d->networkManager->get(request);
+    std::unique_ptr<QNetworkReply> reply(d->networkManager->get(request));
 
-    // Block using a local event loop until the download is finished
     QEventLoop loop;
-    connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    QObject::connect(reply.get(), &QNetworkReply::finished, &loop, &QEventLoop::quit);
     
-    // Timeout for the download
     QTimer timeoutTimer;
     timeoutTimer.setSingleShot(true);
-    connect(&timeoutTimer, &QTimer::timeout, &loop, &QEventLoop::quit);
-    timeoutTimer.start(d->timeoutSeconds * 1000);
+    QObject::connect(&timeoutTimer, &QTimer::timeout, &loop, &QEventLoop::quit);
+    timeoutTimer.start(d->timeoutSeconds * 1000); // 5-minute timeout
 
     loop.exec();
 
-    if (!reply->isFinished()) { // Timeout occurred
+    if (!reply->isFinished()) {
         reply->abort();
-        promise.addResult(makeUnexpected(DownloadError::TimeoutError));
-    } else if (reply->error() != QNetworkReply::NoError) {
-        promise.addResult(makeUnexpected(mapNetworkError(reply->error()).valueOr(DownloadError::NetworkError)));
-    } else {
-        // Save downloaded data
-        QFile tempFile(info.tempPath);
-        if (!tempFile.open(QIODevice::WriteOnly)) {
-            promise.addResult(makeUnexpected(DownloadError::FileSystemError));
-        } else {
-            tempFile.write(reply->readAll());
-            tempFile.close();
-            
-            // Verify checksum
-            if (!info.expectedChecksum.isEmpty()) {
-                auto checksumResult = verifyChecksum(info.tempPath, info.expectedChecksum);
-                if (checksumResult.hasError() || !checksumResult.value()) {
-                     promise.addResult(makeUnexpected(DownloadError::ChecksumMismatch));
-                }
-            }
+        Logger::instance().error("Network timeout for URL: {}", url.toStdString());
+        return makeUnexpected(DownloadError::TimeoutError);
+    }
 
-            if (!future.isFinished()) {
-                // Move to final location
-                auto moveResult = moveToFinalLocation(info.tempPath, info.localPath);
-                if (moveResult.hasError()) {
-                    promise.addResult(makeUnexpected(moveResult.error()));
-                } else {
-                    promise.addResult(Expected<QString, DownloadError>(info.localPath));
-                }
-            }
+    if (reply->error() != QNetworkReply::NoError) {
+        Logger::instance().error("Network error for URL {}: {}", url.toStdString(), reply->errorString().toStdString());
+        return makeUnexpected(DownloadError::NetworkError);
+    }
+    
+    QVariant redirectionTarget = reply->attribute(QNetworkRequest::RedirectionTargetAttribute);
+    if (redirectionTarget.isValid()) {
+        QUrl newUrl = reply->url().resolved(redirectionTarget.toUrl());
+        Logger::instance().info("Redirecting download to: {}", newUrl.toString().toStdString());
+        return downloadFile(newUrl.toString(), localPath, expectedChecksum, enableResume);
+    }
+
+    QFile file(tempPath);
+    if (!file.open(QIODevice::WriteOnly)) {
+        return makeUnexpected(DownloadError::FileSystemError);
+    }
+    file.write(reply->readAll());
+    file.close();
+
+    if (!expectedChecksum.isEmpty()) {
+        auto checksumResult = verifyChecksum(tempPath, expectedChecksum);
+        if (checksumResult.hasError() || !checksumResult.value()) {
+             return makeUnexpected(DownloadError::ChecksumMismatch);
         }
     }
 
-    reply->deleteLater();
-    promise.finish();
-    return future;
+    if (QFile::exists(localPath)) {
+        if (!QFile::remove(localPath)) {
+             return makeUnexpected(DownloadError::FileSystemError);
+        }
+    }
+    if (!QFile::rename(tempPath, localPath)) {
+        return makeUnexpected(DownloadError::FileSystemError);
+    }
+    
+    return localPath;
 }
 
 void ModelDownloader::cancelDownload(const QString& downloadId) {

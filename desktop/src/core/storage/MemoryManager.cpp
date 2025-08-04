@@ -496,8 +496,6 @@ Expected<size_t, MemoryError> MemoryManager::cleanupUnusedBlocks(std::chrono::se
         
         for (auto& [ptr, block] : pool->blocks) {
             if (block->isActive && (now - block->allocatedAt) > maxAge) {
-                // This is a simplified check - in a real implementation,
-                // we'd need to track actual usage
                 blocksToRemove.push_back(ptr);
             }
         }

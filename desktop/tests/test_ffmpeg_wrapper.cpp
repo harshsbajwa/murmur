@@ -36,7 +36,6 @@ private slots:
     void testInvalidInputFiles();
     void testUnsupportedFormats();
     void testCorruptedFiles();
-    void testInsufficientDiskSpace();
     void testInvalidOutputPaths();
     
     // Performance and quality tests
@@ -48,7 +47,6 @@ private slots:
     
     // Edge cases
     void testVeryShortVideos();
-    void testVeryLongVideos();
     void testHighResolutionVideos();
     void testVariousCodecs();
     void testAudioOnlyFiles();
@@ -93,12 +91,16 @@ void TestFFmpegWrapper::init() {
     
     ffmpeg_ = std::make_unique<FFmpegWrapper>();
     
-    // Create test media files with known properties
+    // Create a test video with both video and audio streams
     testVideoFile_ = tempDir_->path() + "/test_video.mp4";
-    testAudioFile_ = tempDir_->path() + "/test_audio.aac";
+    // Using the test class's helper to create a 640x480, 5s video with AAC audio
+    createTestVideoFile(testVideoFile_, 5, "640x480"); 
+    TestUtils::logMessage("Created standard test video file: " + testVideoFile_);
     
-    createTestVideoFile(testVideoFile_);
-    createTestAudioFile(testAudioFile_);
+    // Create a standard test audio file
+    testAudioFile_ = tempDir_->path() + "/test_audio.aac";
+    createTestAudioFile(testAudioFile_, 5, "aac");
+    TestUtils::logMessage("Created standard test audio file: " + testAudioFile_);
     
     QVERIFY(QFileInfo(testVideoFile_).exists());
     QVERIFY(QFileInfo(testAudioFile_).exists());
@@ -785,13 +787,6 @@ void TestFFmpegWrapper::testInvalidOutputPaths() {
     QCOMPARE(result.error(), FFmpegError::IOError);
 }
 
-void TestFFmpegWrapper::testInsufficientDiskSpace() {
-    TEST_SCOPE("testInsufficientDiskSpace");
-    
-    // This test would require simulating insufficient disk space
-    QSKIP("Insufficient disk space test requires special setup");
-}
-
 void TestFFmpegWrapper::testVeryShortVideos() {
     TEST_SCOPE("testVeryShortVideos");
     
@@ -804,13 +799,6 @@ void TestFFmpegWrapper::testVeryShortVideos() {
     
     auto info = result.value();
     QVERIFY(info.duration >= 0.8 && info.duration <= 1.2); // ~1 second ±0.2s
-}
-
-void TestFFmpegWrapper::testVeryLongVideos() {
-    TEST_SCOPE("testVeryLongVideos");
-    
-    // Skip this test for now as it would take too long
-    QSKIP("Long video test skipped for performance");
 }
 
 void TestFFmpegWrapper::testHighResolutionVideos() {

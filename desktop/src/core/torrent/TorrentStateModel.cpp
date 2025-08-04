@@ -35,6 +35,14 @@ QVariant TorrentStateModel::data(const QModelIndex& index, int role) const {
             return formatSpeed(torrent.downloadRate);
         case UploadRateRole:
             return formatSpeed(torrent.uploadRate);
+        case DownloadSpeedRole:
+            return torrent.downloadRate;
+        case UploadSpeedRole:
+            return torrent.uploadRate;
+        case SeedersRole:
+            return torrent.seeders;
+        case LeechersRole:
+            return torrent.leechers;
         case FilesRole:
             return torrent.files;
         case SavePathRole:
@@ -63,6 +71,10 @@ QHash<int, QByteArray> TorrentStateModel::roleNames() const {
     roles[PeersRole] = "peers";
     roles[DownloadRateRole] = "downloadRate";
     roles[UploadRateRole] = "uploadRate";
+    roles[DownloadSpeedRole] = "downloadSpeed";
+    roles[UploadSpeedRole] = "uploadSpeed";
+    roles[SeedersRole] = "seeders";
+    roles[LeechersRole] = "leechers";
     roles[FilesRole] = "files";
     roles[SavePathRole] = "savePath";
     roles[MagnetUriRole] = "magnetUri";

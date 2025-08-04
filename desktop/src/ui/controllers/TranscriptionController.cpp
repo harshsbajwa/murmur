@@ -11,12 +11,32 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QDateTime>
+#include <QVariantMap>
 
 namespace Murmur {
 
 TranscriptionController::TranscriptionController(QObject* parent)
-    : QObject(parent) {
-    Logger::instance().info("TranscriptionController created");
+    : QObject(parent), ready_(false) {
+    selectedLanguage_ = "en";  // Set default language to English ISO code
+    selectedModel_ = "base";     // Set default model
+    Logger::instance().info("TranscriptionController created with defaults: language='en', model='base'");
+}
+
+void TranscriptionController::setReady(bool ready) {
+    if (ready_ != ready) {
+        ready_ = ready;
+        Logger::instance().debug("TranscriptionController ready state changed to: {}", ready ? "true" : "false");
+        emit readyChanged();
+    }
+}
+
+bool TranscriptionController::isReady() const {
+    return ready_;
+}
+
+void TranscriptionController::updateReadyState() {
+    bool isReadyNow = whisperEngine_ != nullptr && storageManager_ != nullptr && mediaController_ != nullptr;
+    setReady(isReadyNow);
 }
 
 void TranscriptionController::setWhisperEngine(WhisperEngine* engine) {
@@ -27,19 +47,30 @@ void TranscriptionController::setWhisperEngine(WhisperEngine* engine) {
         
         whisperEngine_ = engine;
         
-        if (whisperEngine_) {
-            connectEngineSignals();
-            updateAvailableOptions();
-        }
+if (whisperEngine_) {
+    connectEngineSignals();
+    updateAvailableOptions();
+    Logger::instance().info("WhisperEngine connected successfully");
+} else {
+    Logger::instance().warn("WhisperEngine set to null");
+}
+
+updateReadyState();
     }
 }
 
 void TranscriptionController::setStorageManager(StorageManager* storage) {
-    storageManager_ = storage;
+    if (storageManager_ != storage) {
+        storageManager_ = storage;
+        updateReadyState();
+    }
 }
 
 void TranscriptionController::setMediaController(MediaController* controller) {
-    mediaController_ = controller;
+    if (mediaController_ != controller) {
+        mediaController_ = controller;
+        updateReadyState();
+    }
 }
 
 void TranscriptionController::setSelectedLanguage(const QString& language) {
@@ -54,7 +85,6 @@ void TranscriptionController::setSelectedModel(const QString& model) {
         selectedModel_ = model;
         emit selectedModelChanged();
         
-        // Load the model if whisper engine is available
         if (whisperEngine_) {
             whisperEngine_->loadModel(model);
         }
@@ -70,17 +100,33 @@ void TranscriptionController::transcribeCurrentVideo() {
         return;
     }
     
-    // Get current video file from media controller if available
     if (mediaController_) {
         QUrl currentSource = mediaController_->currentVideoSource();
-        if (!currentSource.isEmpty() && currentSource.isLocalFile()) {
+        Logger::instance().info("Current source: {}", currentSource.toString().toStdString());
+        if (!currentSource.isEmpty()) {
             QString filePath = currentSource.toLocalFile();
-            transcribeFile(filePath);
-            return;
+            if (filePath.isEmpty()) {
+                // Handle file:// URLs that might not convert properly
+                filePath = currentSource.toString();
+                if (filePath.startsWith("file://")) {
+                    filePath = filePath.mid(7); // Remove "file://" prefix
+                }
+            }
+            
+            Logger::instance().info("Transcribing file: {}", filePath.toStdString());
+            if (!filePath.isEmpty() && QFileInfo::exists(filePath)) {
+                transcribeFile(filePath);
+                return;
+            } else {
+                Logger::instance().warn("File path is empty or file doesn't exist: {}", filePath.toStdString());
+            }
+        } else {
+            Logger::instance().warn("Current source is empty");
         }
+    } else {
+        Logger::instance().warn("MediaController not available");
     }
     
-    // No video loaded, emit error
     emit transcriptionError("", "No video loaded. Please load a video file first.");
 }
 
@@ -101,9 +147,12 @@ void TranscriptionController::transcribeFile(const QString& filePath, const QStr
     setTranscribing(true);
     currentMediaId_ = mediaId;
     
+    // Reset progress
+    transcriptionProgress_ = 0.0;
+    emit transcriptionProgressChanged();
+    
     TranscriptionSettings settings = createTranscriptionSettings();
     
-    // Check if it's a video file (transcribe from video) or audio file
     QFileInfo fileInfo(filePath);
     QString extension = fileInfo.suffix().toLower();
     QStringList videoExtensions = {"mp4", "avi", "mkv", "mov", "wmv", "flv", "webm", "m4v"};
@@ -124,11 +173,14 @@ void TranscriptionController::transcribeFile(const QString& filePath, const QStr
         
         setTranscribing(false);
         
+        // Reset progress on completion
+        transcriptionProgress_ = 0.0;
+        emit transcriptionProgressChanged();
+        
         if (result.hasValue()) {
             TranscriptionResult transcriptionResult = result.value();
-            setTranscription(transcriptionResult.fullText);
+            setTranscriptionResult(transcriptionResult);
             
-            // Store in database if storage manager is available
             if (storageManager_ && !currentMediaId_.isEmpty()) {
                 storeTranscriptionResult(currentMediaId_, transcriptionResult);
             }
@@ -168,7 +220,7 @@ void TranscriptionController::transcribeAudio(const QString& audioFilePath) {
         
         if (result.hasValue()) {
             TranscriptionResult transcriptionResult = result.value();
-            setTranscription(transcriptionResult.fullText);
+            setTranscriptionResult(transcriptionResult);
             emit transcriptionCompleted("", transcriptionResult.fullText);
         } else {
             QString errorMessage = QString("Audio transcription failed (error %1)")
@@ -188,8 +240,10 @@ void TranscriptionController::downloadModel(const QString& modelSize) {
         emit modelDownloadFailed(modelSize, "Transcription engine not available");
         return;
     }
-    
-    auto future = whisperEngine_->downloadModel(modelSize);
+
+    QFuture<Expected<bool, TranscriptionError>> future = QtConcurrent::run([this, modelSize]() {
+        return whisperEngine_->downloadModel(modelSize);
+    });
     
     auto watcher = new QFutureWatcher<Expected<bool, TranscriptionError>>(this);
     connect(watcher, &QFutureWatcher<Expected<bool, TranscriptionError>>::finished,
@@ -302,14 +356,21 @@ void TranscriptionController::exportTranscription(const QString& format, const Q
 }
 
 void TranscriptionController::onTranscriptionProgress(const QString& taskId, const TranscriptionProgress& progress) {
-    emit transcriptionProgress(taskId, progress.percentage / 100.0);
+    // Update the property
+    qreal newProgress = progress.percentage / 100.0;
+    if (transcriptionProgress_ != newProgress) {
+        transcriptionProgress_ = newProgress;
+        emit transcriptionProgressChanged();
+    }
+    
+    emit transcriptionProgress(taskId, newProgress);
 }
 
 void TranscriptionController::onTranscriptionCompleted(const QString& taskId, const TranscriptionResult& result) {
     QString mediaId = activeTranscriptions_.value(taskId);
     activeTranscriptions_.remove(taskId);
     
-    setTranscription(result.fullText);
+    setTranscriptionResult(result);
     
     if (storageManager_ && !mediaId.isEmpty()) {
         storeTranscriptionResult(mediaId, result);
@@ -365,6 +426,77 @@ void TranscriptionController::setTranscription(const QString& transcription) {
     }
 }
 
+void TranscriptionController::setTranscriptionResult(const TranscriptionResult& result) {
+    setTranscription(result.fullText);
+    
+    // Convert segments to QVariantList for QML consumption, grouping by sentences
+    QVariantList segmentList = groupSegmentsBySentence(result.segments);
+    
+    if (currentSegments_ != segmentList) {
+        currentSegments_ = segmentList;
+        emit segmentsChanged();
+    }
+}
+
+QVariantList TranscriptionController::groupSegmentsBySentence(const QList<TranscriptionSegment>& segments) {
+    QVariantList groupedSegments;
+    
+    if (segments.isEmpty()) {
+        return groupedSegments;
+    }
+    
+    QString currentSentence;
+    qint64 sentenceStartTime = segments.first().startTime;
+    qint64 sentenceEndTime = segments.first().endTime;
+    float totalConfidence = 0.0f;
+    int wordCount = 0;
+    
+    for (const auto& segment : segments) {
+        currentSentence += (currentSentence.isEmpty() ? "" : " ") + segment.text.trimmed();
+        sentenceEndTime = segment.endTime;
+        totalConfidence += segment.confidence;
+        wordCount++;
+        
+        // Check if this segment ends a sentence
+        QString trimmedText = segment.text.trimmed();
+        if (trimmedText.endsWith('.') || trimmedText.endsWith('!') || trimmedText.endsWith('?') || 
+            trimmedText.endsWith(":") || trimmedText.endsWith(";")) {
+            
+            // Create grouped segment
+            QVariantMap sentenceMap;
+            sentenceMap["startTime"] = sentenceStartTime;
+            sentenceMap["endTime"] = sentenceEndTime;
+            sentenceMap["text"] = currentSentence.trimmed();
+            sentenceMap["confidence"] = wordCount > 0 ? totalConfidence / wordCount : 0.0f;
+            groupedSegments.append(sentenceMap);
+            
+            // Reset for next sentence
+            currentSentence.clear();
+            totalConfidence = 0.0f;
+            wordCount = 0;
+            
+            // Set start time for next sentence (if there are more segments)
+            auto nextIt = std::find_if(segments.begin(), segments.end(), 
+                                     [&segment](const TranscriptionSegment& s) { return s.startTime > segment.endTime; });
+            if (nextIt != segments.end()) {
+                sentenceStartTime = nextIt->startTime;
+            }
+        }
+    }
+    
+    // Handle any remaining text that didn't end with punctuation
+    if (!currentSentence.isEmpty()) {
+        QVariantMap sentenceMap;
+        sentenceMap["startTime"] = sentenceStartTime;
+        sentenceMap["endTime"] = sentenceEndTime;
+        sentenceMap["text"] = currentSentence.trimmed();
+        sentenceMap["confidence"] = wordCount > 0 ? totalConfidence / wordCount : 0.0f;
+        groupedSegments.append(sentenceMap);
+    }
+    
+    return groupedSegments;
+}
+
 void TranscriptionController::updateAvailableOptions() {
     if (!whisperEngine_) return;
     
@@ -409,6 +541,9 @@ TranscriptionSettings TranscriptionController::createTranscriptionSettings() con
     settings.enableCapitalization = true;
     settings.outputFormat = "json";
     settings.enableGPU = true;
+    
+    Logger::instance().info("Creating transcription settings: language='{}', model='{}'", 
+                          selectedLanguage_.toStdString(), selectedModel_.toStdString());
     return settings;
 }
 

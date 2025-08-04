@@ -1042,6 +1042,11 @@ std::vector<AVFrame*> FFmpegWrapper::bufferAudioFrame(OperationContext* context,
     outputFrame->sample_rate = context->audioEncoder->sample_rate;
     outputFrame->ch_layout = context->audioEncoder->ch_layout;
     
+    // CRITICAL: Copy timestamp information from input frame to avoid PTS issues
+    outputFrame->pts = inputFrame->pts;
+    outputFrame->pkt_dts = inputFrame->pkt_dts;
+    outputFrame->time_base = inputFrame->time_base;
+    
     if (av_frame_get_buffer(outputFrame, 0) >= 0) {
         // Copy samples from input to output
         int samplesToCopy = std::min(inputFrame->nb_samples, context->targetAudioFrameSize);
@@ -1315,6 +1320,16 @@ Expected<QString, FFmpegError> FFmpegWrapper::performVideoConversion(const QStri
     int video_out_stream_idx = -1;
     int audio_out_stream_idx = -1;
     int ret = 0;
+    bool headerWritten = false;
+    
+    // Determine explicit format for MKV files
+    const char* explicitFormat = nullptr;
+    QString fileExtension = QFileInfo(context->outputPath).suffix().toLower();
+    if (fileExtension == "mkv") {
+        explicitFormat = "matroska";  // Use explicit matroska format for MKV
+    } else if (fileExtension == "webm") {
+        explicitFormat = "webm";
+    }
 
     // 1. Open Input File
     Logger::instance().debug("Opening input file: {}", context->inputPath.toStdString());
@@ -1332,12 +1347,19 @@ Expected<QString, FFmpegError> FFmpegWrapper::performVideoConversion(const QStri
 
     // 2. Setup Output
     Logger::instance().debug("Setting up output context for: {}", context->outputPath.toStdString());
-    avformat_alloc_output_context2(&outFmtCtx, nullptr, nullptr, context->outputPath.toUtf8().constData());
-    if (!outFmtCtx) {
-        Logger::instance().error("Failed to allocate output context");
-        ret = AVERROR(ENOMEM);
+    
+    Logger::instance().debug("Allocating output context with format: {}", explicitFormat ? explicitFormat : "auto");
+    ret = avformat_alloc_output_context2(&outFmtCtx, nullptr, explicitFormat, context->outputPath.toUtf8().constData());
+    if (ret < 0 || !outFmtCtx) {
+        Logger::instance().error("Failed to allocate output context for path: {}, format: {}, error: {}", 
+                                context->outputPath.toStdString(), 
+                                explicitFormat ? explicitFormat : "auto",
+                                ret);
+        ret = ret < 0 ? ret : AVERROR(ENOMEM);
         goto end;
     }
+    
+    Logger::instance().debug("Output format allocated successfully: {}", outFmtCtx->oformat->name);
     context->outputFormat = outFmtCtx;
 
     // 3. Setup Streams, Decoders, and Encoders
@@ -1366,7 +1388,21 @@ Expected<QString, FFmpegError> FFmpegWrapper::performVideoConversion(const QStri
             if (encoder->pix_fmts) {
                 context->videoEncoder->pix_fmt = encoder->pix_fmts[0];
             }
-            context->videoEncoder->time_base = av_inv_q(in_stream->r_frame_rate);
+            
+            // Set proper time base - prefer stream time base, fallback to frame rate inverse
+            if (in_stream->time_base.num > 0 && in_stream->time_base.den > 0) {
+                context->videoEncoder->time_base = in_stream->time_base;
+            } else if (in_stream->r_frame_rate.num > 0 && in_stream->r_frame_rate.den > 0) {
+                context->videoEncoder->time_base = av_inv_q(in_stream->r_frame_rate);
+            } else {
+                // Fallback to 30 fps time base
+                context->videoEncoder->time_base = {1, 30};
+            }
+            
+            // Set frame rate from input stream
+            if (in_stream->r_frame_rate.num > 0 && in_stream->r_frame_rate.den > 0) {
+                context->videoEncoder->framerate = in_stream->r_frame_rate;
+            }
 
             Logger::instance().debug("Opening video encoder: {}", context->options.videoCodec.toStdString());
             if ((ret = avcodec_open2(context->videoEncoder, encoder, nullptr)) < 0) {
@@ -1388,63 +1424,268 @@ Expected<QString, FFmpegError> FFmpegWrapper::performVideoConversion(const QStri
             if (decoderResult.hasError()) { ret = AVERROR(EINVAL); goto end; }
             context->audioDecoder = decoderResult.value();
 
-            const AVCodec* encoder = avcodec_find_encoder_by_name(context->options.audioCodec.toUtf8().constData());
-            if (!encoder) { ret = AVERROR(EINVAL); goto end; }
-            context->audioEncoder = avcodec_alloc_context3(encoder);
-            
-            av_channel_layout_default(&context->audioEncoder->ch_layout, 2);
-            // Use fallback approach for deprecated audio format fields
-            context->audioEncoder->sample_rate = 44100;
-            context->audioEncoder->sample_fmt = AV_SAMPLE_FMT_FLTP;
-            
-            if (encoder->supported_samplerates) {
-                context->audioEncoder->sample_rate = encoder->supported_samplerates[0];
+            // Choose codec based on output format to prevent incompatibility
+            QString selectedCodec = context->options.audioCodec;
+            if (outFmtCtx && outFmtCtx->oformat) {
+                QString formatName = QString(outFmtCtx->oformat->name);
+                if ((formatName.contains("matroska") || formatName.contains("webm")) && selectedCodec == "aac") {
+                    // For MKV, always use stream copy to avoid encoder compatibility issues
+                    Logger::instance().info("Using stream copy for MKV format to avoid codec issues");
+                    selectedCodec = "copy";
+                }
             }
-            if (encoder->sample_fmts) {
-                context->audioEncoder->sample_fmt = encoder->sample_fmts[0];
-            }
-            context->audioEncoder->time_base = {1, context->audioEncoder->sample_rate};
             
-            // Set frame size for AAC encoder (required for proper header writing)
-            if (context->options.audioCodec == "aac") {
-                context->audioEncoder->frame_size = 1024;  // Standard AAC frame size
-                context->targetAudioFrameSize = 1024;
-                // Also set bit rate for AAC encoder
-                context->audioEncoder->bit_rate = context->options.audioBitrate * 1000;
+            const AVCodec* encoder = nullptr;
+            
+            // Handle copy codec specially - skip encoder creation entirely
+            if (selectedCodec == "copy") {
+                Logger::instance().info("Using audio stream copy mode");
+                // For copy mode, we don't need an encoder context
+                context->audioEncoder = nullptr;
+                
+                // Set up stream for direct copying
+                if (audio_out_stream_idx >= 0 && context->audioDecoder) {
+                    AVStream* out_stream = outFmtCtx->streams[audio_out_stream_idx];
+                    avcodec_parameters_from_context(out_stream->codecpar, context->audioDecoder);
+                    out_stream->time_base = context->audioDecoder->time_base;
+                    Logger::instance().debug("Configured stream copy for audio");
+                }
             } else {
-                context->audioEncoder->frame_size = 0;  // Let encoder decide
-                context->targetAudioFrameSize = 0;
-                context->audioEncoder->bit_rate = context->options.audioBitrate * 1000;
+                encoder = avcodec_find_encoder_by_name(selectedCodec.toUtf8().constData());
+                if (!encoder) { 
+                    Logger::instance().error("Primary audio encoder not found: {}", selectedCodec.toStdString());
+                    ret = AVERROR(EINVAL); 
+                    goto end; 
+                }
+                context->audioEncoder = avcodec_alloc_context3(encoder);
             }
             
-            Logger::instance().debug("Opening audio encoder: {}", context->options.audioCodec.toStdString());
-            ret = avcodec_open2(context->audioEncoder, encoder, nullptr);
-            if (ret < 0) {
+            if (!context->audioEncoder && selectedCodec != "copy") {
+                Logger::instance().error("Failed to allocate audio encoder context");
+                ret = AVERROR(ENOMEM);
+                goto end;
+            }
+            
+            // Configure based on selected codec with proper format support
+            Logger::instance().debug("Configuring audio encoder for codec: {}", selectedCodec.toStdString());
+            
+            if (selectedCodec == "copy") {
+                // Copy mode is already configured above
+                Logger::instance().debug("Audio copy mode configured");
+            } else {
+                // Set default channel layout for encoding modes
+                av_channel_layout_default(&context->audioEncoder->ch_layout, 2);
+                
+                if (selectedCodec == "libvorbis") {
+                context->audioEncoder->sample_rate = 44100;
+                context->audioEncoder->sample_fmt = encoder->sample_fmts ? encoder->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
+                context->audioEncoder->bit_rate = 128000; // 128 kbps
+            } else if (selectedCodec == "libopus") {
+                context->audioEncoder->sample_rate = 48000;
+                context->audioEncoder->sample_fmt = encoder->sample_fmts ? encoder->sample_fmts[0] : AV_SAMPLE_FMT_S16;
+                context->audioEncoder->bit_rate = 128000; // 128 kbps
+                // Configure libopus specific options
+                context->audioEncoder->compression_level = 10;  // Valid range 0-10
+                context->audioEncoder->frame_size = 960;        // 20ms frame at 48kHz
+            } else if (selectedCodec == "flac") {
+                context->audioEncoder->sample_rate = 44100;
+                context->audioEncoder->sample_fmt = encoder->sample_fmts ? encoder->sample_fmts[0] : AV_SAMPLE_FMT_S32;
+            } else if (selectedCodec == "libmp3lame") {
+                context->audioEncoder->sample_rate = 44100;
+                context->audioEncoder->sample_fmt = encoder->sample_fmts ? encoder->sample_fmts[0] : AV_SAMPLE_FMT_S16P;
+            } else {
+                // Default for AAC and others
+                context->audioEncoder->sample_rate = 44100;
+                context->audioEncoder->sample_fmt = encoder->sample_fmts ? encoder->sample_fmts[0] : AV_SAMPLE_FMT_FLTP;
+            }
+            
+            // Format-specific audio configuration to prevent distortion
+            if (outFmtCtx && outFmtCtx->oformat) {
+                QString formatName = QString(outFmtCtx->oformat->name);
+                if (formatName.contains("mov") || formatName.contains("mp4")) {
+                    // For MOV/MP4, match input sample rate when possible to avoid resampling distortion
+                    int inputSampleRate = context->audioDecoder ? context->audioDecoder->sample_rate : 44100;
+                    
+                    if (encoder->supported_samplerates) {
+                        // First try to match input sample rate exactly
+                        const int* rates = encoder->supported_samplerates;
+                        context->audioEncoder->sample_rate = rates[0]; // Default fallback
+                        
+                        for (int i = 0; rates[i] != 0; i++) {
+                            if (rates[i] == inputSampleRate) {
+                                context->audioEncoder->sample_rate = inputSampleRate;
+                                Logger::instance().debug("Matched input sample rate for MOV: {}", inputSampleRate);
+                                break;
+                            }
+                        }
+                        
+                        // If no exact match, prefer 44100 for better compatibility
+                        if (context->audioEncoder->sample_rate != inputSampleRate) {
+                            for (int i = 0; rates[i] != 0; i++) {
+                                if (rates[i] == 44100) {
+                                    context->audioEncoder->sample_rate = 44100;
+                                    break;
+                                }
+                            }
+                        }
+                        Logger::instance().debug("Selected sample rate for MOV: {} (input was {})", 
+                                                context->audioEncoder->sample_rate, inputSampleRate);
+                    } else {
+                        context->audioEncoder->sample_rate = inputSampleRate; // Match input exactly
+                        Logger::instance().debug("Matched input sample rate to avoid resampling: {}", inputSampleRate);
+                    }
+                } else {
+                    // For other formats, use first supported sample rate
+                    if (encoder->supported_samplerates) {
+                        context->audioEncoder->sample_rate = encoder->supported_samplerates[0];
+                    }
+                }
+            } else {
+                if (encoder->supported_samplerates) {
+                    context->audioEncoder->sample_rate = encoder->supported_samplerates[0];
+                }
+            }
+            
+                if (encoder && encoder->sample_fmts) {
+                    context->audioEncoder->sample_fmt = encoder->sample_fmts[0];
+                }
+            } // End of non-copy codec configuration
+            
+            // Only configure encoder parameters if we have an encoder (not in copy mode)
+            if (context->audioEncoder) {
+                context->audioEncoder->time_base = {1, context->audioEncoder->sample_rate};
+                
+                // Configure encoder parameters and prevent audio clipping
+                if (context->options.audioCodec == "aac") {
+                    context->audioEncoder->frame_size = 1024;  // Standard AAC frame size
+                    context->targetAudioFrameSize = 1024;
+                    // Lower bit rate slightly to prevent distortion
+                    context->audioEncoder->bit_rate = std::min(context->options.audioBitrate * 1000, 128000);
+                } else {
+                    context->audioEncoder->frame_size = 0;  // Let encoder decide
+                    context->targetAudioFrameSize = 0;
+                    context->audioEncoder->bit_rate = context->options.audioBitrate * 1000;
+                }
+                
+                // Add audio normalization/limiting to prevent clipping
+                context->audioEncoder->compression_level = -1; // Use default compression
+                
+                if (outFmtCtx && outFmtCtx->oformat) {
+                    QString formatName = QString(outFmtCtx->oformat->name);
+                    if (formatName.contains("mov") || formatName.contains("mp4")) {
+                        // For MOV, use more conservative audio settings
+                        context->audioEncoder->cutoff = 0; // Let encoder decide cutoff frequency
+                        if (context->options.audioCodec == "aac") {
+                            context->audioEncoder->profile = FF_PROFILE_AAC_LOW; // Use AAC-LC profile for compatibility
+                        }
+                    } else if (formatName.contains("matroska") || formatName.contains("webm")) {
+                        // For MKV/WebM, configure encoder based on selected codec
+                        context->audioEncoder->cutoff = 0; // Let encoder decide cutoff frequency
+                        
+                        if (selectedCodec == "libvorbis") {
+                            // Vorbis-specific settings for MKV
+                            context->audioEncoder->compression_level = 5; // Good quality/size balance
+                            context->audioEncoder->frame_size = 0; // Variable frame size
+                            context->targetAudioFrameSize = 0;
+                            // Ensure sample rate is supported by libvorbis
+                            if (encoder->supported_samplerates) {
+                                bool rateSupported = false;
+                                const int* rates = encoder->supported_samplerates;
+                                for (int i = 0; rates[i] != 0; i++) {
+                                    if (rates[i] == context->audioEncoder->sample_rate) {
+                                        rateSupported = true;
+                                        break;
+                                    }
+                                }
+                                if (!rateSupported) {
+                                    context->audioEncoder->sample_rate = 44100; // Safe fallback
+                                }
+                            }
+                        } else if (selectedCodec == "libopus") {
+                            // Opus-specific settings for MKV
+                            context->audioEncoder->frame_size = 0; // Variable frame size
+                            context->targetAudioFrameSize = 0;
+                            context->audioEncoder->sample_rate = 48000; // Opus prefers 48kHz
+                        }
+                    }
+                }
+                
+                Logger::instance().debug("Opening audio encoder: {}", context->options.audioCodec.toStdString());
+                ret = avcodec_open2(context->audioEncoder, encoder, nullptr);
+            } else {
+                // For copy mode, no encoder to open
+                Logger::instance().debug("Audio copy mode - no encoder to open");
+                ret = 0; // Success for copy mode
+            }
+            
+            // Only handle encoder errors if we actually tried to open an encoder
+            if (context->audioEncoder && ret < 0) {
                 Logger::instance().error("Failed to open audio encoder: {}", context->options.audioCodec.toStdString());
                 Logger::instance().debug("avcodec_open2 failed with error: {}", ret);
                 
-                // For AAC encoder failures, try falling back to libmp3lame
+                // Format-specific fallback strategy
                 if (context->options.audioCodec == "aac") {
-                    Logger::instance().info("Falling back to libmp3lame audio encoder");
+                    Logger::instance().info("AAC encoder failed, selecting format-specific fallback");
                     avcodec_free_context(&context->audioEncoder);
                     
-                    encoder = avcodec_find_encoder_by_name("libmp3lame");
-                    if (!encoder) {
-                        Logger::instance().error("libmp3lame encoder not found");
+                    const char* fallbackCodec = nullptr;
+                    
+                    // Check output format for appropriate fallback
+                    if (outFmtCtx && outFmtCtx->oformat) {
+                        QString formatName = QString(outFmtCtx->oformat->name);
+                        if (formatName.contains("matroska") || formatName.contains("webm")) {
+                            // For MKV/WebM, prefer libvorbis or libopus
+                            encoder = avcodec_find_encoder_by_name("libvorbis");
+                            if (encoder) {
+                                fallbackCodec = "libvorbis";
+                            } else {
+                                encoder = avcodec_find_encoder_by_name("libopus");
+                                fallbackCodec = encoder ? "libopus" : nullptr;
+                            }
+                        } else {
+                            // For other formats, use libmp3lame
+                            encoder = avcodec_find_encoder_by_name("libmp3lame");
+                            fallbackCodec = encoder ? "libmp3lame" : nullptr;
+                        }
+                    }
+                    
+                    if (!encoder || !fallbackCodec) {
+                        Logger::instance().error("No suitable fallback audio encoder found");
                         ret = AVERROR(EINVAL);
                         goto end;
                     }
                     
+                    Logger::instance().info("Using fallback audio encoder: {}", fallbackCodec);
                     context->audioEncoder = avcodec_alloc_context3(encoder);
                     av_channel_layout_default(&context->audioEncoder->ch_layout, 2);
-                    context->audioEncoder->sample_rate = 44100;
-                    context->audioEncoder->sample_fmt = AV_SAMPLE_FMT_S16P;
-                    context->audioEncoder->bit_rate = context->options.audioBitrate * 1000;
+                    
+                    // Configure encoder based on type using supported formats
+                    if (strcmp(fallbackCodec, "libvorbis") == 0) {
+                        context->audioEncoder->sample_rate = 44100;
+                        context->audioEncoder->sample_fmt = AV_SAMPLE_FMT_FLTP; // Vorbis requires float planar
+                        context->audioEncoder->bit_rate = context->options.audioBitrate * 1000;
+                        context->audioEncoder->compression_level = 5; // Good quality/size balance
+                        context->audioEncoder->frame_size = 0; // Variable frame size for vorbis
+                        context->targetAudioFrameSize = 0;
+                    } else if (strcmp(fallbackCodec, "libopus") == 0) {
+                        context->audioEncoder->sample_rate = 48000;
+                        context->audioEncoder->sample_fmt = AV_SAMPLE_FMT_S16; // Opus prefers S16
+                        context->audioEncoder->bit_rate = context->options.audioBitrate * 1000;
+                        context->audioEncoder->frame_size = 0; // Variable frame size for opus
+                        context->targetAudioFrameSize = 0;
+                    } else {
+                        // libmp3lame
+                        context->audioEncoder->sample_rate = 44100;
+                        context->audioEncoder->sample_fmt = AV_SAMPLE_FMT_S16P; // MP3 prefers S16P
+                        context->audioEncoder->bit_rate = context->options.audioBitrate * 1000;
+                    }
+                    
+                    // Set proper time base for all fallback encoders
                     context->audioEncoder->time_base = {1, context->audioEncoder->sample_rate};
                     
                     ret = avcodec_open2(context->audioEncoder, encoder, nullptr);
                     if (ret < 0) {
-                        Logger::instance().error("Failed to open libmp3lame encoder as fallback");
+                        Logger::instance().error("Failed to open fallback encoder: {}", fallbackCodec);
                         goto end;
                     }
                 } else {
@@ -1452,11 +1693,22 @@ Expected<QString, FFmpegError> FFmpegWrapper::performVideoConversion(const QStri
                 }
             }
             
-            AVStream* out_stream = avformat_new_stream(outFmtCtx, nullptr);
-            if (!out_stream) { ret = AVERROR(ENOMEM); goto end; }
-            audio_out_stream_idx = out_stream->index;
-            avcodec_parameters_from_context(out_stream->codecpar, context->audioEncoder);
-            out_stream->time_base = context->audioEncoder->time_base;
+            // Create output stream (this is done regardless of copy or encode mode)
+            if (audio_out_stream_idx < 0) {
+                AVStream* out_stream = avformat_new_stream(outFmtCtx, nullptr);
+                if (!out_stream) { ret = AVERROR(ENOMEM); goto end; }
+                audio_out_stream_idx = out_stream->index;
+                
+                // For copy mode, use decoder parameters; for encode mode, use encoder parameters
+                if (context->audioEncoder) {
+                    avcodec_parameters_from_context(out_stream->codecpar, context->audioEncoder);
+                    out_stream->time_base = context->audioEncoder->time_base;
+                } else if (context->audioDecoder) {
+                    // Copy mode - use input stream parameters
+                    avcodec_parameters_from_context(out_stream->codecpar, context->audioDecoder);
+                    out_stream->time_base = context->audioDecoder->time_base;
+                }
+            }
         }
     }
 
@@ -1491,11 +1743,87 @@ Expected<QString, FFmpegError> FFmpegWrapper::performVideoConversion(const QStri
         }
     }
 
+    // Comprehensive validation before writing header
+    Logger::instance().debug("Validating encoder parameters before writing header");
+    if (context->audioEncoder) {
+        const AVCodec* audioCodec = avcodec_find_encoder(context->audioEncoder->codec_id);
+        if (audioCodec) {
+            Logger::instance().debug("Audio encoder: {} (id: {})", audioCodec->name, static_cast<int>(context->audioEncoder->codec_id));
+            Logger::instance().debug("Audio sample_rate: {}, sample_fmt: {}, channels: {}", 
+                                   context->audioEncoder->sample_rate,
+                                   static_cast<int>(context->audioEncoder->sample_fmt),
+                                   context->audioEncoder->ch_layout.nb_channels);
+            
+            // Validate sample rate
+            if (audioCodec->supported_samplerates) {
+                bool validSampleRate = false;
+                for (int i = 0; audioCodec->supported_samplerates[i] != 0; i++) {
+                    if (audioCodec->supported_samplerates[i] == context->audioEncoder->sample_rate) {
+                        validSampleRate = true;
+                        break;
+                    }
+                }
+                if (!validSampleRate) {
+                    Logger::instance().error("Invalid sample rate {} for codec {}", 
+                                           context->audioEncoder->sample_rate, audioCodec->name);
+                    // Use first supported sample rate
+                    context->audioEncoder->sample_rate = audioCodec->supported_samplerates[0];
+                    Logger::instance().info("Using fallback sample rate: {}", context->audioEncoder->sample_rate);
+                }
+            }
+            
+            // Validate sample format
+            if (audioCodec->sample_fmts) {
+                bool validSampleFormat = false;
+                for (int i = 0; audioCodec->sample_fmts[i] != AV_SAMPLE_FMT_NONE; i++) {
+                    if (audioCodec->sample_fmts[i] == context->audioEncoder->sample_fmt) {
+                        validSampleFormat = true;
+                        break;
+                    }
+                }
+                if (!validSampleFormat) {
+                    Logger::instance().error("Invalid sample format {} for codec {}", 
+                                           static_cast<int>(context->audioEncoder->sample_fmt), audioCodec->name);
+                    // Use first supported sample format
+                    context->audioEncoder->sample_fmt = audioCodec->sample_fmts[0];
+                    Logger::instance().info("Using fallback sample format: {}", static_cast<int>(context->audioEncoder->sample_fmt));
+                }
+            }
+        }
+    }
+
+    // Additional validation for MKV format before writing header
+    if (outFmtCtx && outFmtCtx->oformat) {
+        QString formatName = QString(outFmtCtx->oformat->name);
+        if (formatName.contains("matroska") || formatName.contains("webm")) {
+            Logger::instance().debug("Validating MKV format before header write");
+            
+            // Ensure audio stream parameters are properly set for MKV
+            if (context->audioEncoder) {
+                // Validate channel layout is set
+                if (context->audioEncoder->ch_layout.nb_channels == 0) {
+                    av_channel_layout_default(&context->audioEncoder->ch_layout, 2);
+                    Logger::instance().debug("Set default channel layout for MKV");
+                }
+                
+                // Ensure time base is valid
+                if (context->audioEncoder->time_base.num == 0 || context->audioEncoder->time_base.den == 0) {
+                    context->audioEncoder->time_base = {1, context->audioEncoder->sample_rate};
+                    Logger::instance().debug("Set default time base for MKV audio");
+                }
+            }
+        }
+    }
+
     Logger::instance().debug("Writing output header");
     if ((ret = avformat_write_header(outFmtCtx, nullptr)) < 0) {
-        Logger::instance().error("Failed to write output header");
+        Logger::instance().error("Failed to write output header - error code: {}", ret);
+        char error_buf[256];
+        av_strerror(ret, error_buf, sizeof(error_buf));
+        Logger::instance().error("FFmpeg error details: {}", error_buf);
         goto end;
     }
+    headerWritten = true;
 
     // 4. Transcoding Loop
     packet = av_packet_alloc();
@@ -1517,6 +1845,20 @@ Expected<QString, FFmpegError> FFmpegWrapper::performVideoConversion(const QStri
         int out_stream_idx = (in_stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) ? video_out_stream_idx : audio_out_stream_idx;
         AVStream* out_stream = (out_stream_idx >= 0) ? outFmtCtx->streams[out_stream_idx] : nullptr;
 
+        // Handle stream copy mode for audio (when enc_ctx is null)
+        if (in_stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO && !enc_ctx && out_stream) {
+            // Direct stream copy mode - no decoding/encoding needed
+            packet->stream_index = out_stream_idx;
+            av_packet_rescale_ts(packet, in_stream->time_base, out_stream->time_base);
+            ret = av_interleaved_write_frame(outFmtCtx, packet);
+            if (ret < 0) {
+                Logger::instance().error("Failed to copy audio packet: {}", ret);
+                break;
+            }
+            av_packet_unref(packet);
+            continue;
+        }
+        
         if (!dec_ctx || !enc_ctx || !out_stream) {
             av_packet_unref(packet);
             continue;
@@ -1590,16 +1932,61 @@ Expected<QString, FFmpegError> FFmpegWrapper::performVideoConversion(const QStri
     ret = 0; // Reset ret after normal loop exit
 
 end:
-    // 5. Flush Encoders
+    // 5. Flush Encoders and receive remaining packets
+    Logger::instance().debug("Flushing encoders");
+    
     if (context->videoEncoder) {
         avcodec_send_frame(context->videoEncoder, nullptr); // Flush
+        AVPacket* flush_pkt = av_packet_alloc();
+        while (avcodec_receive_packet(context->videoEncoder, flush_pkt) == 0) {
+            flush_pkt->stream_index = video_out_stream_idx;
+            av_packet_rescale_ts(flush_pkt, context->videoEncoder->time_base, outFmtCtx->streams[video_out_stream_idx]->time_base);
+            av_interleaved_write_frame(outFmtCtx, flush_pkt);
+            av_packet_unref(flush_pkt);
+        }
+        av_packet_free(&flush_pkt);
     }
+    
     if (context->audioEncoder) {
         avcodec_send_frame(context->audioEncoder, nullptr); // Flush
+        AVPacket* flush_pkt = av_packet_alloc();
+        while (avcodec_receive_packet(context->audioEncoder, flush_pkt) == 0) {
+            flush_pkt->stream_index = audio_out_stream_idx;
+            av_packet_rescale_ts(flush_pkt, context->audioEncoder->time_base, outFmtCtx->streams[audio_out_stream_idx]->time_base);
+            av_interleaved_write_frame(outFmtCtx, flush_pkt);
+            av_packet_unref(flush_pkt);
+        }
+        av_packet_free(&flush_pkt);
     }
 
-    if (outFmtCtx) {
-        av_write_trailer(outFmtCtx);
+    // Write trailer with error checking - only if header was successfully written
+    if (headerWritten && outFmtCtx && outFmtCtx->pb) {  // Ensure header was written and IO context is valid
+        Logger::instance().debug("Writing output trailer");
+        
+        // Validate streams before writing trailer
+        bool streamsValid = true;
+        for (unsigned int i = 0; i < outFmtCtx->nb_streams; i++) {
+            if (!outFmtCtx->streams[i] || !outFmtCtx->streams[i]->codecpar) {
+                Logger::instance().error("Invalid stream {} detected before trailer", i);
+                streamsValid = false;
+            }
+        }
+        
+        if (streamsValid) {
+            ret = av_write_trailer(outFmtCtx);
+            if (ret < 0) {
+                Logger::instance().error("Failed to write trailer - error code: {}", ret);
+                char error_buf[256];
+                av_strerror(ret, error_buf, sizeof(error_buf));
+                Logger::instance().error("FFmpeg trailer error: {}", error_buf);
+            } else {
+                Logger::instance().debug("Trailer written successfully");
+            }
+        } else {
+            Logger::instance().error("Skipping trailer write due to invalid streams");
+        }
+    } else if (!headerWritten) {
+        Logger::instance().debug("Skipping trailer write - header was not successfully written");
     }
 
     av_packet_free(&packet);

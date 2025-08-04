@@ -16,11 +16,25 @@ AppController::AppController(QObject* parent)
     : QObject(parent)
 {
     // Initialize core engines in dependency order
-    storageManager_ = std::make_unique<StorageManager>(this);
+    // Check for test mode to skip certain initializations
+    bool testMode = qEnvironmentVariableIsSet("MURMUR_TEST_MODE");
+    
+    Logger::instance().info("Creating StorageManager");
+    if (!testMode) {
+        storageManager_ = std::make_unique<StorageManager>(this);
+    } else {
+        Logger::instance().info("Test Mode: Skipping StorageManager initialization");
+    }
+    
+    Logger::instance().info("Creating FileManager");
     fileManager_ = std::make_unique<FileManager>(this);
+    Logger::instance().info("Creating MediaPipeline");
     mediaPipeline_ = std::make_unique<MediaPipeline>(this);
+    Logger::instance().info("Creating VideoPlayer");
     videoPlayer_ = std::make_unique<VideoPlayer>(this);
+    Logger::instance().info("Creating WhisperEngine");
     whisperEngine_ = std::make_unique<WhisperEngine>(this);
+    Logger::instance().info("Creating TorrentEngine");
     torrentEngine_ = std::make_unique<TorrentEngine>(this);
     
     // Load settings
@@ -48,15 +62,19 @@ void AppController::setDarkMode(bool darkMode) {
 
 void AppController::initialize() {
     if (isInitialized_) {
+        Logger::instance().info("AppController already initialized");
         return;
     }
     
+    Logger::instance().info("Starting AppController initialization");
     setStatus("Initializing core engines...");
     
     // Initialize asynchronously
     auto future = QtConcurrent::run([this]() {
         try {
+            Logger::instance().info("Starting core engine initialization in background thread");
             initializeCoreEngines();
+            Logger::instance().info("Core engine initialization completed successfully");
             return true;
         } catch (const std::exception& e) {
             Logger::instance().error("Initialization failed: {}", e.what());
@@ -66,17 +84,22 @@ void AppController::initialize() {
     
     auto watcher = new QFutureWatcher<bool>(this);
     connect(watcher, &QFutureWatcher<bool>::finished, [this, watcher]() {
+        Logger::instance().info("Initialization future watcher finished");
         bool success = watcher->result();
         watcher->deleteLater();
         
         if (success) {
+            Logger::instance().info("Initialization successful, calling handleInitializationComplete");
             handleInitializationComplete();
         } else {
+            Logger::instance().error("Initialization failed, calling handleInitializationError");
             handleInitializationError("Failed to initialize core engines");
         }
     });
     
+    Logger::instance().info("Setting future for watcher");
     watcher->setFuture(future);
+    Logger::instance().info("Future set for watcher");
 }
 
 void AppController::shutdown() {
@@ -123,14 +146,29 @@ void AppController::loadSettings() {
 }
 
 void AppController::handleInitializationComplete() {
+    Logger::instance().info("Starting handleInitializationComplete");
     connectEngineSignals();
     
     isInitialized_ = true;
+    Logger::instance().info("Setting isInitialized_ to true");
     emit initializedChanged();
+    Logger::instance().info("Emitted initializedChanged");
     
     setStatus("Ready");
     
     Logger::instance().info("Application initialization complete");
+    
+    // Also emit a specific signal for UI components
+    emit initializationComplete();
+    Logger::instance().info("Emitted initializationComplete");
+    
+    // Log the state of all engines
+    Logger::instance().info("StorageManager: {}", storageManager_ ? "available" : "null");
+    Logger::instance().info("FileManager: {}", fileManager_ ? "available" : "null");
+    Logger::instance().info("MediaPipeline: {}", mediaPipeline_ ? "available" : "null");
+    Logger::instance().info("VideoPlayer: {}", videoPlayer_ ? "available" : "null");
+    Logger::instance().info("WhisperEngine: {}", whisperEngine_ ? "available" : "null");
+    Logger::instance().info("TorrentEngine: {}", torrentEngine_ ? "available" : "null");
 }
 
 void AppController::handleInitializationError(const QString& error) {
@@ -138,6 +176,10 @@ void AppController::handleInitializationError(const QString& error) {
     emit initializationFailed(error);
     
     Logger::instance().error("Application initialization failed: {}", error.toStdString());
+    
+    // Also emit initializedChanged to ensure any waiting code knows initialization is done (even if failed)
+    isInitialized_ = false;
+    emit initializedChanged();
 }
 
 void AppController::setStatus(const QString& status) {
@@ -148,35 +190,71 @@ void AppController::setStatus(const QString& status) {
 }
 
 void AppController::initializeCoreEngines() {
+    Logger::instance().info("Starting core engine initialization");
+    
+    bool testMode = qEnvironmentVariableIsSet("MURMUR_TEST_MODE");
+    
     // Initialize engines in dependency order
     
     // 1. Initialize storage first
     if (storageManager_) {
+        Logger::instance().info("Initializing storage manager");
         auto result = storageManager_->initialize();
         if (!result) {
+            Logger::instance().error("Failed to initialize storage manager");
             throw std::runtime_error("Failed to initialize storage manager");
         }
+        Logger::instance().info("Storage manager initialized successfully");
+    } else if (!testMode) {
+        Logger::instance().error("Storage manager is null");
+        throw std::runtime_error("Storage manager is null");
+    } else {
+        Logger::instance().info("Test Mode: Storage manager is null (expected)");
     }
     
     // File manager doesn't need explicit initialization
+    Logger::instance().info("File manager ready");
+    
     // Platform accelerator initialization skipped (abstract class)
+    Logger::instance().info("Platform accelerator ready");
+    
     // Media pipeline doesn't need explicit initialization
+    Logger::instance().info("Media pipeline ready");
+    
     // Video player doesn't need explicit initialization
+    Logger::instance().info("Video player ready");
     
     // 2. Initialize transcription engine
     if (whisperEngine_) {
+        Logger::instance().info("Initializing whisper engine");
         auto result = whisperEngine_->initialize();
         if (!result) {
             Logger::instance().warn("Whisper engine initialization failed, transcription features disabled");
+        } else {
+            Logger::instance().info("Whisper engine initialized successfully");
         }
+    } else {
+        Logger::instance().warn("Whisper engine is null");
     }
     
     // 3. Start torrent engine last
     if (torrentEngine_) {
+        Logger::instance().info("Starting torrent engine session");
         torrentEngine_->startSession();
+        Logger::instance().info("Torrent engine session started");
+    } else {
+        Logger::instance().warn("Torrent engine is null");
     }
     
     Logger::instance().info("All core engines initialized successfully");
+    
+    // Log the state of all engines
+    Logger::instance().info("StorageManager: {}", storageManager_ ? "available" : "null");
+    Logger::instance().info("FileManager: {}", fileManager_ ? "available" : "null");
+    Logger::instance().info("MediaPipeline: {}", mediaPipeline_ ? "available" : "null");
+    Logger::instance().info("VideoPlayer: {}", videoPlayer_ ? "available" : "null");
+    Logger::instance().info("WhisperEngine: {}", whisperEngine_ ? "available" : "null");
+    Logger::instance().info("TorrentEngine: {}", torrentEngine_ ? "available" : "null");
 }
 
 void AppController::connectEngineSignals() {

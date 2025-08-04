@@ -170,20 +170,49 @@ bool WhisperEngine::isReady() const {
     return isInitialized_ && !currentModel_.isEmpty() && whisperWrapper_;
 }
 
-QFuture<Expected<bool, TranscriptionError>> WhisperEngine::downloadModel(const QString& modelSize) {
-    return QtConcurrent::run([this, modelSize]() -> Expected<bool, TranscriptionError> {
-        if (!AVAILABLE_MODELS.contains(modelSize)) {
+Expected<bool, TranscriptionError> WhisperEngine::downloadModel(const QString& modelSize) {
+    if (!AVAILABLE_MODELS.contains(modelSize)) {
+        Logger::instance().error("WhisperEngine: Unsupported model size requested: {}", modelSize.toStdString());
+        return makeUnexpected(TranscriptionError::ModelDownloadFailed);
+    }
+
+    QString modelPath = getModelPath(modelSize);
+    if (QFileInfo::exists(modelPath)) {
+        Logger::instance().info("WhisperEngine: Model already exists: {}", modelSize.toStdString());
+        return true;
+    }
+
+    return downloadModelFromHub(modelSize);
+}
+
+Expected<bool, TranscriptionError> WhisperEngine::downloadModelFromHub(const QString& modelSize) {
+    QString modelUrl = getModelUrl(modelSize);
+    QString modelPath = getModelPath(modelSize);
+
+    QDir modelsDir(modelsPath_);
+    if (!modelsDir.exists()) {
+        if (!modelsDir.mkpath(".")) {
+            Logger::instance().error("WhisperEngine: Failed to create models directory: {}", modelsPath_.toStdString());
             return makeUnexpected(TranscriptionError::ModelDownloadFailed);
         }
+    }
 
-        QString modelPath = getModelPath(modelSize);
-        if (QFileInfo::exists(modelPath)) {
-            Logger::instance().info("WhisperEngine: Model already exists: {}", modelSize.toStdString());
-            return true;
-        }
-
-        return downloadModelFromHub(modelSize);
-    });
+    Logger::instance().info("WhisperEngine: Starting model download: {}", modelUrl.toStdString());
+    
+    auto result = modelDownloader_->downloadFile(modelUrl, modelPath);
+    
+    if (result.hasError()) {
+        Logger::instance().error("WhisperEngine: Model download failed with error code: {}", static_cast<int>(result.error()));
+        return makeUnexpected(TranscriptionError::ModelDownloadFailed);
+    }
+    
+    if (!QFileInfo::exists(modelPath)) {
+        Logger::instance().error("WhisperEngine: Model file not found after download: {}", modelPath.toStdString());
+        return makeUnexpected(TranscriptionError::ModelDownloadFailed);
+    }
+    
+    Logger::instance().info("WhisperEngine: Model download successful: {}", modelPath.toStdString());
+    return true;
 }
 
 Expected<bool, TranscriptionError> WhisperEngine::loadModel(const QString& modelSize) {
@@ -262,6 +291,9 @@ QFuture<Expected<TranscriptionResult, TranscriptionError>> WhisperEngine::transc
             return makeUnexpected(TranscriptionError::UnsupportedLanguage);
         }
 
+        // Mutex locker to serialize transcription tasks
+        QMutexLocker locker(&whisperMutex_);
+
         // Then check if we have a model loaded
         if (!isInitialized_ || currentModel_.isEmpty()) {
             return makeUnexpected(TranscriptionError::ModelNotLoaded);
@@ -273,6 +305,23 @@ QFuture<Expected<TranscriptionResult, TranscriptionError>> WhisperEngine::transc
             return makeUnexpected(convertWhisperError(audioDataResult.error()));
         }
 
+        // Create task for progress tracking
+        QString taskId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        auto task = std::make_unique<TranscriptionTask>();
+        task->taskId = taskId;
+        task->audioFile = audioFilePath;
+        task->startTime = QDateTime::currentMSecsSinceEpoch();
+        task->isCancelled = false;
+        
+        // Get audio duration for progress calculation
+        auto durationResult = getAudioDuration(audioFilePath);
+        task->audioDuration = durationResult.hasValue() ? durationResult.value() : 0;
+        
+        {
+            QMutexLocker tlocker(&tasksMutex_);
+            activeTasks_[taskId] = std::move(task);
+        }
+
         // Configure whisper.cpp parameters
         WhisperConfig config;
         config.language = settings.language;
@@ -282,30 +331,53 @@ QFuture<Expected<TranscriptionResult, TranscriptionError>> WhisperEngine::transc
         config.beamSize = settings.beamSize;
         config.nThreads = QThread::idealThreadCount();
 
+        // Emit initial progress
+        updateTaskProgress(taskId, 0.0);
+
         // Asynchronously transcribe
         auto result = whisperWrapper_->transcribe(audioDataResult.value(), config);
         if (result.hasError()) {
-             Logger::instance().error("WhisperEngine: Transcription failed with error: {}", static_cast<int>(result.error()));
+            // Clean up task
+            {
+                QMutexLocker tlocker(&tasksMutex_);
+                activeTasks_.erase(taskId);
+            }
+            Logger::instance().error("WhisperEngine: Transcription failed with error: {}", static_cast<int>(result.error()));
             return makeUnexpected(convertWhisperError(result.error()));
         }
 
+        // Emit progress at 50% (processing completed, converting results)
+        updateTaskProgress(taskId, 50.0);
+
         // Convert result to our engine's format
         TranscriptionResult finalResult = convertWhisperResult(result.value(), settings);
+        
+        // Emit completion progress
+        updateTaskProgress(taskId, 100.0);
 
-        // Update performance stats
-        auto durationResult = getAudioDuration(audioFilePath);
-        qint64 audioDuration = durationResult.hasValue() ? durationResult.value() : 0;
+        // Update performance stats and clean up task
+        qint64 audioDuration = 0;
+        {
+            QMutexLocker tlocker(&tasksMutex_);
+            auto it = activeTasks_.find(taskId);
+            if (it != activeTasks_.end()) {
+                audioDuration = it->second->audioDuration;
+                activeTasks_.erase(it);
+            }
+            
+            performanceStats_.totalTranscriptions++;
+            performanceStats_.totalProcessingTime += finalResult.processingTime;
+            performanceStats_.totalAudioDuration += audioDuration;
 
-        QMutexLocker locker(&tasksMutex_);
-        performanceStats_.totalTranscriptions++;
-        performanceStats_.totalProcessingTime += finalResult.processingTime;
-        performanceStats_.totalAudioDuration += audioDuration;
-
-        if (audioDuration > 0) {
-            double rtf = static_cast<double>(finalResult.processingTime) / audioDuration;
-            performanceStats_.averageRealTimeFactor =
-                (performanceStats_.averageRealTimeFactor * (performanceStats_.totalTranscriptions - 1) + rtf) / performanceStats_.totalTranscriptions;
+            if (audioDuration > 0) {
+                double rtf = static_cast<double>(finalResult.processingTime) / audioDuration;
+                performanceStats_.averageRealTimeFactor =
+                    (performanceStats_.averageRealTimeFactor * (performanceStats_.totalTranscriptions - 1) + rtf) / performanceStats_.totalTranscriptions;
+            }
         }
+
+        // Emit completion signal with final result
+        emit transcriptionCompleted(taskId, finalResult);
 
         return finalResult;
     });
@@ -315,15 +387,25 @@ QFuture<Expected<TranscriptionResult, TranscriptionError>> WhisperEngine::transc
     const QString& videoFilePath,
     const TranscriptionSettings& settings) {
 
-    return QtConcurrent::run([this, videoFilePath, settings]() -> Expected<TranscriptionResult, TranscriptionError> {
+    // Create a promise to handle the async operation properly
+    auto promise = std::make_shared<QPromise<Expected<TranscriptionResult, TranscriptionError>>>();
+    auto future = promise->future();
+    promise->start();
+
+    // First, extract audio from video asynchronously
+    QtConcurrent::run([this, videoFilePath, settings, promise]() {
         if (!InputValidator::isValidMediaFile(videoFilePath)) {
-            return makeUnexpected(TranscriptionError::InvalidAudioFormat);
+            promise->addResult(makeUnexpected(TranscriptionError::InvalidAudioFormat));
+            promise->finish();
+            return;
         }
 
-        // Create temporary directory
+        // Create temporary directory (this can be done synchronously as it's fast)
         auto tempDirResult = createTempDirectory();
         if (tempDirResult.hasError()) {
-            return makeUnexpected(tempDirResult.error());
+            promise->addResult(makeUnexpected(tempDirResult.error()));
+            promise->finish();
+            return;
         }
 
         QString tempDir = tempDirResult.value();
@@ -333,16 +415,29 @@ QFuture<Expected<TranscriptionResult, TranscriptionError>> WhisperEngine::transc
         auto extractResult = extractAudioFromVideo(videoFilePath, audioPath);
         if (extractResult.hasError()) {
             cleanupTempDirectory(tempDir);
-            return makeUnexpected(extractResult.error());
+            promise->addResult(makeUnexpected(extractResult.error()));
+            promise->finish();
+            return;
         }
 
-        // Transcribe the extracted audio
-        auto transcribeResult = transcribeAudio(audioPath, settings);
-        auto result = transcribeResult.result();  // Block until completed
-
-        cleanupTempDirectory(tempDir);
-        return result;
+        // Now transcribe the extracted audio asynchronously without blocking
+        auto transcribeTask = transcribeAudio(audioPath, settings);
+        
+        // Create a watcher to handle completion
+        auto watcher = new QFutureWatcher<Expected<TranscriptionResult, TranscriptionError>>();
+        QObject::connect(watcher, &QFutureWatcher<Expected<TranscriptionResult, TranscriptionError>>::finished,
+                        [promise, tempDir, watcher, this]() {
+            auto result = watcher->result();
+            cleanupTempDirectory(tempDir);  // Clean up temp directory
+            promise->addResult(result);
+            promise->finish();
+            watcher->deleteLater();
+        });
+        
+        watcher->setFuture(transcribeTask);
     });
+
+    return future;
 }
 
 void WhisperEngine::cancelTranscription(const QString& taskId) {
@@ -358,8 +453,9 @@ void WhisperEngine::cancelTranscription(const QString& taskId) {
 }
 
 void WhisperEngine::cancelAllTranscriptions() {
+    whisperWrapper_->requestCancel();
+    // Also cancel any command-line processes if that path is used
     QMutexLocker locker(&tasksMutex_);
-
     for (const auto& pair : activeTasks_) {
         pair.second->isCancelled = true;
         if (pair.second->process) {
@@ -555,49 +651,6 @@ Expected<bool, TranscriptionError> WhisperEngine::validateAudioFormat(const QStr
 
 QString WhisperEngine::getModelPath(const QString& modelSize) const {
     return modelsPath_ + "/ggml-" + modelSize + ".bin";
-}
-
-Expected<bool, TranscriptionError> WhisperEngine::downloadModelFromHub(const QString& modelSize) {
-    QString modelUrl = getModelUrl(modelSize);
-    QString modelPath = getModelPath(modelSize);
-
-    // Check if model already exists
-    if (QFileInfo::exists(modelPath)) {
-        Logger::instance().info("WhisperEngine: Model already exists: {}", modelPath.toStdString());
-        return true;
-    }
-
-    // Ensure models directory exists
-    QDir modelsDir(modelsPath_);
-    if (!modelsDir.exists()) {
-        if (!modelsDir.mkpath(".")) {
-            Logger::instance().error("WhisperEngine: Failed to create models directory: {}", modelsPath_.toStdString());
-            Logger::instance().error("WhisperEngine: Directory absolute path: {}", modelsDir.absolutePath().toStdString());
-            Logger::instance().error("WhisperEngine: Directory exists: {}", modelsDir.exists());
-            return makeUnexpected(TranscriptionError::ModelDownloadFailed);
-        }
-        Logger::instance().info("WhisperEngine: Created models directory: {}", modelsPath_.toStdString());
-    }
-
-    // Start download
-    Logger::instance().info("WhisperEngine: Starting model download: {}", modelUrl.toStdString());
-    
-    auto downloadFuture = modelDownloader_->downloadFile(modelUrl, modelPath);
-    auto result = downloadFuture.result();
-    
-    if (result.hasError()) {
-        Logger::instance().error("WhisperEngine: Model download failed: {}", static_cast<int>(result.error()));
-        return makeUnexpected(TranscriptionError::ModelDownloadFailed);
-    }
-    
-    // Verify the downloaded file
-    if (!QFileInfo::exists(modelPath)) {
-        Logger::instance().error("WhisperEngine: Model file not found after download: {}", modelPath.toStdString());
-        return makeUnexpected(TranscriptionError::ModelDownloadFailed);
-    }
-    
-    Logger::instance().info("WhisperEngine: Model download successful: {}", modelPath.toStdString());
-    return true;
 }
 
 QString WhisperEngine::getModelUrl(const QString& modelSize) const {
@@ -1496,6 +1549,8 @@ TranscriptionError WhisperEngine::convertWhisperError(WhisperError error) {
             return TranscriptionError::ModelNotLoaded;
         case WhisperError::UnsupportedFeature:
             return TranscriptionError::UnsupportedLanguage;
+        case WhisperError::Cancelled:
+            return TranscriptionError::Cancelled;
         default:
             return TranscriptionError::InferenceError;
     }

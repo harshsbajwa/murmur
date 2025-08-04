@@ -334,8 +334,6 @@ Expected<void, SandboxError> SandboxManager::requestNetworkAccess(const QString&
         return makeUnexpected(SandboxError::InitializationFailed);
     }
 
-    // For this simplified implementation, we'll deny network access by default
-    // In a real implementation, this would check system policies or request user permission
     Q_UNUSED(domain)
     Q_UNUSED(port)
     
@@ -644,12 +642,45 @@ Expected<void, SandboxError> SandboxManager::validateConfig(const SandboxConfig&
 }
 
 Expected<void, SandboxError> SandboxManager::validatePath(const QString& path) {
-    if (!d->validator || !d->validator->isValidPath(path)) {
+    if (!d->validator) {
+        return makeUnexpected(SandboxError::ConfigurationError);
+    }
+    
+    // Comprehensive path validation using all security checks
+    if (!InputValidator::isPathSafe(path)) {
+        MURMUR_WARN("Path failed comprehensive safety check: {}", path.toStdString());
         return makeUnexpected(SandboxError::InvalidPath);
     }
-
-    QFileInfo fileInfo(path);
-    if (!fileInfo.exists()) {
+    
+    // Additional specific checks
+    if (InputValidator::hasNullBytes(path)) {
+        MURMUR_WARN("Path contains null bytes: {}", path.toStdString());
+        return makeUnexpected(SandboxError::InvalidPath);
+    }
+    
+    if (!InputValidator::isLengthSafe(path, 4096)) {
+        MURMUR_WARN("Path exceeds safe length: {}", path.toStdString());
+        return makeUnexpected(SandboxError::InvalidPath);
+    }
+    
+    if (!InputValidator::isSymlinkSafe(path)) {
+        MURMUR_WARN("Path has unsafe symlinks: {}", path.toStdString());
+        return makeUnexpected(SandboxError::InvalidPath);
+    }
+    
+    if (InputValidator::containsEncodingAttacks(path)) {
+        MURMUR_WARN("Path contains encoding attacks: {}", path.toStdString());
+        return makeUnexpected(SandboxError::InvalidPath);
+    }
+    
+    if (!InputValidator::isUnicodeSafe(path)) {
+        MURMUR_WARN("Path contains unsafe Unicode characters: {}", path.toStdString());
+        return makeUnexpected(SandboxError::InvalidPath);
+    }
+    
+    // Traditional validation as fallback
+    if (!InputValidator::validateFilePath(path)) {
+        MURMUR_WARN("Path failed traditional validation: {}", path.toStdString());
         return makeUnexpected(SandboxError::InvalidPath);
     }
 

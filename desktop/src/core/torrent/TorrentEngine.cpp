@@ -54,6 +54,9 @@ TorrentEngine::TorrentEngine(QObject* parent)
     // Initialize session
     initializeSession();
     
+    // Start session and timers for status updates
+    startSession();
+    
     MURMUR_INFO("TorrentEngine initialized");
 }
 
@@ -607,6 +610,8 @@ TorrentEngine::TorrentInfo TorrentEngine::createTorrentInfo(const libtorrent::to
     
     info.progress = status.progress;
     info.peers = status.num_peers;
+    info.seeders = status.num_seeds;
+    info.leechers = status.num_peers - status.num_seeds; // leechers = total peers - seeders
     info.downloadRate = status.download_payload_rate;
     info.uploadRate = status.upload_payload_rate;
     info.isPaused = (status.flags & libtorrent::torrent_flags::paused) != 0;
@@ -614,16 +619,18 @@ TorrentEngine::TorrentInfo TorrentEngine::createTorrentInfo(const libtorrent::to
     
     // Determine status
     if (status.flags & libtorrent::torrent_flags::paused) {
-        info.status = "Paused";
+        info.status = "paused";
     } else if (status.state == libtorrent::torrent_status::seeding) {
-        info.status = "Seeding";
+        info.status = "seeding";
         info.isSeeding = true;
     } else if (status.state == libtorrent::torrent_status::downloading) {
-        info.status = "Downloading";
+        info.status = "downloading";
     } else if (status.state == libtorrent::torrent_status::checking_files) {
-        info.status = "Checking";
+        info.status = "checking";
+    } else if (status.progress >= 1.0) {
+        info.status = "completed";
     } else {
-        info.status = "Connecting";
+        info.status = "connecting";
     }
     
     return info;

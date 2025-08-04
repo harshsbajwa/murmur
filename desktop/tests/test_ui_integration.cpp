@@ -16,9 +16,6 @@ using namespace Murmur::Test;
 
 /**
  * @brief Comprehensive UI integration tests
- * 
- * Tests real UI workflows with proper validation of functionality
- * rather than mocking or bypassing logic.
  */
 class TestUIIntegration : public QObject {
     Q_OBJECT

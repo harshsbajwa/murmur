@@ -30,6 +30,8 @@ public:
         qint64 size = 0;
         qreal progress = 0.0;
         int peers = 0;
+        int seeders = 0;
+        int leechers = 0;
         qint64 downloadRate = 0;
         qint64 uploadRate = 0;
         QStringList files;

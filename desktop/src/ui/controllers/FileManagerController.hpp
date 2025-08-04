@@ -4,8 +4,9 @@
 #include <QtCore/QString>
 #include <QtCore/QStringList>
 #include <QtCore/QUrl>
-#include <QFuture>
+#include <QtCore/QFuture>
 #include "../../core/storage/FileManager.hpp"
+#include "../../core/common/Logger.hpp"
 
 namespace Murmur {
 
@@ -16,17 +17,28 @@ class FileManagerController : public QObject {
     Q_PROPERTY(qreal totalProgress READ totalProgress NOTIFY progressChanged)
     Q_PROPERTY(int activeOperationsCount READ activeOperationsCount NOTIFY operationsChanged)
     Q_PROPERTY(bool isBusy READ isBusy NOTIFY busyChanged)
+    Q_PROPERTY(qint64 totalSpace READ totalSpace NOTIFY diskSpaceChanged)
+    Q_PROPERTY(qint64 usedSpace READ usedSpace NOTIFY diskSpaceChanged)
+    Q_PROPERTY(QStringList fileModel READ fileModel NOTIFY fileModelChanged)
+    Q_PROPERTY(bool isReady READ isReady NOTIFY readyChanged)
 
 public:
-    explicit FileManagerController(QObject* parent = nullptr);
-    
-    Q_INVOKABLE void setFileManager(FileManager* fileManager);
+explicit FileManagerController(QObject* parent = nullptr);
+
+void setReady(bool ready);
+void updateReadyState();
+
+Q_INVOKABLE void setFileManager(FileManager* fileManager);
     
     QString defaultDownloadPath() const;
     QString defaultExportPath() const;
     qreal totalProgress() const;
     int activeOperationsCount() const;
     bool isBusy() const;
+    qint64 totalSpace() const;
+    qint64 usedSpace() const;
+    QStringList fileModel() const;
+bool isReady() const;
 
 public slots:
     // Directory operations
@@ -67,12 +79,31 @@ public slots:
     void setDefaultDownloadPath(const QString& path);
     void setDefaultExportPath(const QString& path);
     void openInFileManager(const QString& path);
+    
+    // Disk space management
+    Q_INVOKABLE void updateDiskSpace();
+    
+    // File model management
+    Q_INVOKABLE void refreshFileModel();
+    Q_INVOKABLE void removeFile(const QString& filePath);
 
 signals:
+    // File model changes
+    void fileModelChanged();
+    void readyChanged();
+    
+    // Path changes
     void pathsChanged();
+    
+    // Progress changes
     void progressChanged();
+    
+    // Operation changes
     void operationsChanged();
     void busyChanged();
+    
+    // Disk space changes
+    void diskSpaceChanged();
     
     // Directory analysis results
     void directoryAnalyzed(const QString& path, int fileCount, int dirCount, qint64 totalSize, const QStringList& videoFiles);
@@ -103,11 +134,17 @@ private slots:
     void updateProgress();
 
 private:
-    FileManager* fileManager_ = nullptr;
-    
-    QHash<QString, QPair<qint64, qint64>> operationProgress_; // operationId -> (processed, total)
-    qreal totalProgress_ = 0.0;
-    bool isBusy_ = false;
+FileManager* fileManager_ = nullptr;
+
+bool ready_ = false;
+
+QHash<QString, QPair<qint64, qint64>> operationProgress_; // operationId -> (processed, total)
+qreal totalProgress_ = 0.0;
+bool isBusy_ = false;
+mutable qint64 totalSpace_ = -1;  // Cached value
+mutable qint64 usedSpace_ = -1;   // Cached value
+mutable QDateTime lastDiskSpaceUpdate_; // Last update time
+QStringList fileModel_;
     
     QString translateFileError(FileError error) const;
     void setBusy(bool busy);

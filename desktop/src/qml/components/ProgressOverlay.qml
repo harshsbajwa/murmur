@@ -121,10 +121,11 @@ Rectangle {
                     
                     contentItem: Item {
                         implicitHeight: 6
+                        clip: true  // Ensure progress indicator stays within bounds
                         
                         Rectangle {
                             width: progressOverlay.progress >= 0 ? 
-                                   (progressOverlay.progress * parent.width) : parent.width
+                                   (progressOverlay.progress * parent.width) : (parent.width * 0.3)
                             height: parent.height
                             radius: 3
                             color: "#2196F3"
@@ -135,7 +136,7 @@ Rectangle {
                                 loops: Animation.Infinite
                                 
                                 NumberAnimation {
-                                    from: -parent.width
+                                    from: -width
                                     to: parent.width
                                     duration: 1000
                                     easing.type: Easing.InOutQuad

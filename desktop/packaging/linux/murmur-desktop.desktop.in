@@ -1,0 +1,14 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Murmur Desktop
+Comment=P2P Video Transcription Application
+GenericName=Video Transcription
+Exec=@CMAKE_INSTALL_PREFIX@/@CMAKE_INSTALL_BINDIR@/MurmurDesktop
+Icon=murmur-desktop
+Terminal=false
+StartupNotify=true
+Categories=AudioVideo;Video;Network;P2P;
+MimeType=video/mp4;video/avi;video/mkv;video/mov;video/wmv;video/flv;video/webm;video/m4v;video/3gp;video/ogv;
+Keywords=video;transcription;p2p;torrent;whisper;ai;
+StartupWMClass=MurmurDesktopApp

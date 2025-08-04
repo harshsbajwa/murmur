@@ -17,7 +17,7 @@ Rectangle {
     color: mouseArea.containsMouse ? Qt.rgba(palette.highlight.r, palette.highlight.g, palette.highlight.b, 0.1) : "transparent"
     border.color: palette.mid
     border.width: 1
-    radius: 4
+    radius: 8
     
     MouseArea {
         id: mouseArea
@@ -31,23 +31,22 @@ Rectangle {
     
     RowLayout {
         anchors.fill: parent
-        anchors.margins: 8
-        spacing: 12
+        anchors.margins: 12
+        spacing: 16
         
         // Status indicator
         Rectangle {
-            width: 8
-            height: 8
-            radius: 4
+            width: 12
+            height: 12
+            radius: 6
             color: getStatusColor(torrentInfo ? torrentInfo.status : "")
             Layout.alignment: Qt.AlignTop | Qt.AlignLeft
-            Layout.topMargin: 8
         }
         
         // Main content
         ColumnLayout {
             Layout.fillWidth: true
-            spacing: 4
+            spacing: 6
             
             // Name and size
             RowLayout {
@@ -57,14 +56,14 @@ Rectangle {
                     Layout.fillWidth: true
                     text: torrentInfo ? torrentInfo.name : ""
                     font.bold: true
-                    font.pointSize: 11
+                    font.pointSize: 12
                     color: palette.windowText
                     elide: Text.ElideRight
                 }
                 
                 Text {
                     text: formatSize(torrentInfo ? torrentInfo.size : 0)
-                    font.pointSize: 10
+                    font.pointSize: 11
                     color: palette.placeholderText
                 }
             }
@@ -72,25 +71,25 @@ Rectangle {
             // Progress bar
             ProgressBar {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 4
+                Layout.preferredHeight: 6
                 from: 0
                 to: 1
                 value: torrentInfo ? torrentInfo.progress : 0
                 
                 background: Rectangle {
-                    implicitHeight: 4
+                    implicitHeight: 6
                     color: palette.mid
-                    radius: 2
+                    radius: 3
                 }
                 
                 contentItem: Item {
-                    implicitHeight: 4
+                    implicitHeight: 6
                     
                     Rectangle {
                         width: torrentItem.torrentInfo ? 
                                (torrentItem.torrentInfo.progress * parent.width) : 0
                         height: parent.height
-                        radius: 2
+                        radius: 3
                         color: getProgressColor(torrentInfo ? torrentInfo.status : "")
                     }
                 }
@@ -102,22 +101,22 @@ Rectangle {
                 
                 Text {
                     text: getStatusText(torrentInfo ? torrentInfo.status : "")
-                    font.pointSize: 9
+                    font.pointSize: 10
                     color: palette.windowText
                 }
                 
                 Text {
                     text: "•"
-                    font.pointSize: 9
+                    font.pointSize: 10
                     color: palette.placeholderText
-                    visible: torrentInfo && torrentInfo.status === "downloading"
+                    visible: torrentInfo && (torrentInfo.status === "downloading" || torrentInfo.status === "seeding")
                 }
                 
                 Text {
                     text: qsTr("%1% • ↓%2 ↑%3").arg(Math.round((torrentInfo ? torrentInfo.progress : 0) * 100))
                                                 .arg(formatSpeed(torrentInfo ? torrentInfo.downloadSpeed : 0))
                                                 .arg(formatSpeed(torrentInfo ? torrentInfo.uploadSpeed : 0))
-                    font.pointSize: 9
+                    font.pointSize: 10
                     color: palette.placeholderText
                     visible: torrentInfo && (torrentInfo.status === "downloading" || torrentInfo.status === "seeding")
                 }
@@ -129,7 +128,7 @@ Rectangle {
                 Text {
                     text: qsTr("S:%1 L:%2").arg(torrentInfo ? torrentInfo.seeders : 0)
                                            .arg(torrentInfo ? torrentInfo.leechers : 0)
-                    font.pointSize: 9
+                    font.pointSize: 10
                     color: palette.placeholderText
                     visible: torrentInfo && (torrentInfo.seeders > 0 || torrentInfo.leechers > 0)
                 }
@@ -138,24 +137,48 @@ Rectangle {
         
         // Control buttons
         RowLayout {
-            spacing: 4
+            spacing: 8
             Layout.alignment: Qt.AlignTop
             
-            Button {
-                width: 24
-                height: 24
+            // Play button (visible when torrent is completed/seeding)
+            RoundButton {
+                width: 32
+                height: 32
+                visible: torrentInfo && (torrentInfo.status === "seeding" || torrentInfo.status === "completed")
+                
+                icon.source: "qrc:/qt/qml/Murmur/resources/images/play_symbol.svg"
+                icon.width: 20
+                icon.height: 20
+                icon.color: "#ffffff"
                 
                 background: Rectangle {
-                    color: parent.pressed ? palette.mid : "transparent"
-                    radius: 12
+                    color: parent.pressed ? "#1976D2" : "#2196F3"
+                    radius: 16
                 }
                 
-                contentItem: Text {
-                    text: (torrentInfo && torrentInfo.status === "downloading") ? "⏸" : "▶"
-                    color: palette.windowText
-                    font.pointSize: 10
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
+                onClicked: {
+                    torrentItem.selected(infoHash)
+                }
+                
+                ToolTip.text: qsTr("Play")
+                ToolTip.visible: hovered
+            }
+            
+            // Pause/Resume button
+            RoundButton {
+                width: 32
+                height: 32
+                
+                icon.source: (torrentInfo && torrentInfo.status === "downloading") ? 
+                            "qrc:/qt/qml/Murmur/resources/images/pause_symbol.svg" : "qrc:/qt/qml/Murmur/resources/images/play_symbol.svg"
+                icon.width: 20
+                icon.height: 20
+                icon.color: "#ffffff"
+                
+                background: Rectangle {
+                    color: parent.pressed ? palette.mid : 
+                          (torrentInfo && torrentInfo.status === "downloading") ? "#FF9800" : "#4CAF50"
+                    radius: 16
                 }
                 
                 onClicked: {
@@ -171,21 +194,18 @@ Rectangle {
                 ToolTip.visible: hovered
             }
             
-            Button {
-                width: 24
-                height: 24
+            RoundButton {
+                width: 32
+                height: 32
+                
+                icon.source: "qrc:/qt/qml/Murmur/resources/images/more.svg"
+                icon.width: 20
+                icon.height: 20
+                icon.color: "#ffffff"
                 
                 background: Rectangle {
-                    color: parent.pressed ? "#ffcdd2" : "transparent"
-                    radius: 12
-                }
-                
-                contentItem: Text {
-                    text: "✕"
-                    color: "#f44336"
-                    font.pointSize: 12
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
+                    color: parent.pressed ? "#ffcdd2" : "#f44336"
+                    radius: 16
                 }
                 
                 onClicked: {
@@ -205,6 +225,8 @@ Rectangle {
             case "paused": return "#FF9800"       // Orange
             case "error": return "#F44336"        // Red
             case "completed": return "#4CAF50"    // Green
+            case "checking": return "#9C27B0"     // Purple
+            case "connecting": return "#607D8B"   // Blue Grey
             default: return "#9E9E9E"             // Grey
         }
     }
@@ -214,6 +236,8 @@ Rectangle {
             case "downloading": return "#2196F3"  // Blue
             case "seeding": return "#4CAF50"      // Green
             case "completed": return "#4CAF50"    // Green
+            case "checking": return "#9C27B0"     // Purple
+            case "connecting": return "#607D8B"   // Blue Grey
             default: return "#9E9E9E"             // Grey
         }
     }
@@ -225,6 +249,8 @@ Rectangle {
             case "paused": return qsTr("Paused")
             case "error": return qsTr("Error")
             case "completed": return qsTr("Completed")
+            case "checking": return qsTr("Checking files")
+            case "connecting": return qsTr("Connecting")
             default: return qsTr("Unknown")
         }
     }

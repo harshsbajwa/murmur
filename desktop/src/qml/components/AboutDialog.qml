@@ -36,7 +36,7 @@ Dialog {
                     Image {
                         id: appIcon
                         anchors.fill: parent
-                        source: "qrc:/icons/app.png"
+                        source: "qrc:/qt/qml/Murmur/resources/icons/app.png"
                         fillMode: Image.PreserveAspectFit
                         smooth: true
                         

@@ -51,6 +51,15 @@ public:
     static bool isValidIdentifier(const QString& identifier);
     static bool isValidCacheKey(const QString& key);
     
+    // Enhanced security checks
+    static bool hasNullBytes(const QString& input);
+    static bool isSymlinkSafe(const QString& path);
+    static bool isLengthSafe(const QString& input, int maxLength = 4096);
+    static bool isPathSafe(const QString& path);
+    static bool containsEncodingAttacks(const QString& input);
+    static bool isUnicodeSafe(const QString& input);
+    static QString decodeAllEncodings(const QString& input);
+    
 private:
     // Constants
     static constexpr qint64 MAX_FILE_SIZE = 50LL * 1024 * 1024 * 1024; // 50GB maximum file size

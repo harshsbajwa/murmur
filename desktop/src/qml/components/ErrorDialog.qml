@@ -11,9 +11,10 @@ Dialog {
     property bool showDetails: false
     
     function showError(title, message, details = "") {
-        errorTitle = title
-        errorMessage = message
-        errorDetails = details
+        console.log("ErrorDialog.showError called:", title, message, details)
+        errorTitle = title || "Error"
+        errorMessage = message || "An unknown error occurred"
+        errorDetails = details || ""
         showDetails = false
         open()
     }
@@ -23,6 +24,7 @@ Dialog {
     anchors.centerIn: parent
     width: Math.min(600, parent.width * 0.8)
     height: showDetails ? Math.min(500, parent.height * 0.8) : implicitHeight
+    z: 10000  // Ensure dialog appears above progress overlay
     
     standardButtons: Dialog.Ok | (errorDetails ? Dialog.Help : Dialog.NoButton)
     

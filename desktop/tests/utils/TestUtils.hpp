@@ -128,6 +128,13 @@ public:
     static QString getRealSampleVideoFile();
     static QString getRealSampleAudioFile();
     static bool validateRealMediaFile(const QString& filePath);
+    
+    // Test asset helpers using QFINDTESTDATA
+    static QString getTestAssetPath(const QString& filename);
+    static QString getTestVideoAsset();
+    static QString getTestAudioToneAsset();
+    static QString getTestAudioSpeechAsset();
+    static bool hasFFmpegFallback();
 
 private:
     static QTemporaryDir* tempDir_;

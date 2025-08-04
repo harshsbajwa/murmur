@@ -10,7 +10,6 @@ extern int runTestExpected(int argc, char** argv);
 extern int runTestInputValidator(int argc, char** argv);
 extern int runTestRetryManager(int argc, char** argv);
 extern int runTestTorrentEngine(int argc, char** argv);
-extern int runTestVideoProcessingIntegration(int argc, char** argv);
 extern int runTestSimpleRealMedia(int argc, char** argv);
 extern int runTestRealMediaProcessing(int argc, char** argv);
 extern int runTestPerformanceBenchmarks(int argc, char** argv);
@@ -41,14 +40,14 @@ int main(int argc, char** argv) {
         {"InputValidator", runTestInputValidator},
         {"RetryManager", runTestRetryManager},
         {"TorrentEngine", runTestTorrentEngine},
-        // {"VideoProcessingIntegration", runTestVideoProcessingIntegration}, // Temporarily disabled - hangs
         {"SimpleRealMedia", runTestSimpleRealMedia},
-        // {"RealMediaProcessing", runTestRealMediaProcessing}, // Temporarily disabled
-        // {"PerformanceBenchmarks", runTestPerformanceBenchmarks}, // Temporarily disabled  
-        // {"WhisperEngine", runTestWhisperEngine}, // Temporarily disabled - tests timing out
+        // {"RealMediaProcessing", runTestRealMediaProcessing},
+        // {"PerformanceBenchmarks", runTestPerformanceBenchmarks},
+        {"WhisperEngine", runTestWhisperEngine},
         {"StorageManager", runTestStorageManager},
         {"SecurityComponents", runTestSecurityComponents},
-        {"FFmpegWrapper", runTestFFmpegWrapper}, // Re-enabled to debug runtime errors
+        {"FFmpegWrapper", runTestFFmpegWrapper},
+        // {"UIFlows", runTestUIFlows},
         {"EndToEndIntegration", runTestEndToEndIntegration}
         // UIFlows test disabled due to unresolved API mismatches
         // Re-enable once MediaPipeline/UI integration is stabilized

@@ -83,7 +83,7 @@ struct MediaRecord {
         }
         
         // Check torrentHash format if it's provided
-        if (!torrentHash.isEmpty() && (torrentHash.length() != 40 || !torrentHash.contains(QRegularExpression("^[0-9a-fA-F]{40}$")))) {
+        if (!torrentHash.isEmpty() && (torrentHash.length() != 40 || !QRegularExpression("^[0-9a-fA-F]{40}$").match(torrentHash).hasMatch())) {
             return false;
         }
         
@@ -235,6 +235,10 @@ private:
     void bindMediaParams(QSqlQuery& query, const MediaRecord& media);
     void bindTranscriptionParams(QSqlQuery& query, const TranscriptionRecord& transcription);
     void bindSessionParams(QSqlQuery& query, const PlaybackSession& session);
+    
+    // Insert helpers (for easier testing of constraint violations)
+    Expected<bool, StorageError> insertTorrentRecord(const TorrentRecord& torrent);
+    Expected<QString, StorageError> insertMediaRecord(const MediaRecord& media);
     
     // Validation
     Expected<bool, StorageError> validateTorrentRecord(const TorrentRecord& torrent);

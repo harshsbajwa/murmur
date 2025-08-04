@@ -77,7 +77,7 @@ public:
     bool isReady() const; // Test compatibility method
     
     // Model management
-    QFuture<Expected<bool, TranscriptionError>> downloadModel(const QString& modelSize);
+    Expected<bool, TranscriptionError> downloadModel(const QString& modelSize);
     Expected<bool, TranscriptionError> loadModel(const QString& modelSize);
     void unloadModel();
     QString getCurrentModel() const;
@@ -295,6 +295,8 @@ private:
     static const QString PROGRESS_PATTERN;
     static const QString SEGMENT_PATTERN;
     static const QString TIMESTAMP_PATTERN;
+
+    mutable QMutex whisperMutex_; 
 };
 
 } // namespace Murmur
