@@ -32,25 +32,33 @@ class MurmurDesktopConan(ConanFile):
         "sqlite3/*:shared": False,
         # OpenSSL options
         "openssl/*:shared": False,
+        # Whisper.cpp options
+        "whisper-cpp/*:shared": False,
+        "whisper-cpp/*:with_metal": True,  # macOS Metal acceleration
+        "whisper-cpp/*:with_cuda": False,  # Disable CUDA for compatibility
+        "whisper-cpp/*:with_openvino": False,
     }
 
     def requirements(self):
         # Core multimedia dependencies
-        self.requires("ffmpeg/6.1")
+        self.requires("ffmpeg/7.1.1")
         self.requires("libx265/3.4")
         
         # Networking and P2P  
-        self.requires("libtorrent/1.2.19")
+        self.requires("libtorrent/2.0.10")
         self.requires("openssl/[>=1.1 <4]")
         
+        # Transcription
+        self.requires("whisper-cpp/1.7.5")
+        
         # Database and logging
-        self.requires("sqlite3/3.44.2")
-        self.requires("spdlog/1.12.0")
+        self.requires("sqlite3/3.49.1")
+        self.requires("spdlog/1.15.3")
         
         # Compression libraries
         self.requires("zlib/1.3.1")
         self.requires("bzip2/1.0.8")
-        self.requires("xz_utils/5.4.4")
+        self.requires("xz_utils/5.4.5")
 
     def system_requirements(self):
         """Install system dependencies for each platform"""
@@ -75,6 +83,7 @@ class MurmurDesktopConan(ConanFile):
         if self.settings.os == "Windows":
             self.options["ffmpeg/*"].with_cuda = False  # Avoid driver dependencies
         elif self.settings.os == "Macos":
+            self.options["whisper-cpp/*"].with_metal = True
             self.options["ffmpeg/*"].with_videotoolbox = True
         elif self.settings.os == "Linux":
             self.options["ffmpeg/*"].with_vaapi = True
