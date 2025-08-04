@@ -2,10 +2,13 @@ name: Build and Release
 
 on:
   push:
-    branches: [ main, develop ]
-    tags: [ 'v*' ]
+    branches:
+      - develop
+      - main
   pull_request:
-    branches: [ main ]
+    branches:
+      - develop
+      - main
 
 env:
   QT_VERSION: '6.8.3'
