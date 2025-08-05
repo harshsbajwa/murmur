@@ -115,7 +115,7 @@ class BuildManager:
             "compiler": "gcc",
             "compiler.version": "11",
             "compiler.libcxx": "libstdc++11",
-            "compiler.cppstd": "20"
+            "compiler.cppstd": "17"
         }
 
         if self.config.target_os == "macos":
@@ -127,7 +127,7 @@ class BuildManager:
             settings["compiler.version"] = "193"
             settings["compiler.runtime"] = "static" if self.config.build_type == "Release" else "dynamic"
             settings["compiler.cppstd"] = "14"
-            # not valid for the msvc compiler profile
+            settings["compiler.toolset"] = "v143" 
             if "compiler.libcxx" in settings:
                 del settings["compiler.libcxx"]
 
@@ -199,42 +199,6 @@ class BuildManager:
         elif self.config.target_os == "windows":
             self.sign_windows_app(signing_config)
     
-    def sign_macos_app(self, signing_config):
-        """Sign macOS application and prepare for notarization"""
-        app_path = self.config.build_dir / "src" / "MurmurDesktopApp.app"
-        
-        codesign_cmd = [
-            "codesign", "--sign", signing_config["identity"],
-            "--entitlements", str(self.config.root_dir / "packaging" / "macos" / "entitlements.plist"),
-            "--options", "runtime",
-            "--timestamp",
-            "--deep", "--force",
-            str(app_path)
-        ]
-        
-        self.run_command(codesign_cmd)
-        
-        dmg_path = self.config.build_dir / f"MurmurDesktop-{self.config.arch}.dmg"
-        create_dmg_cmd = [
-            "hdiutil", "create", "-volname", "Murmur Desktop",
-            "-srcfolder", str(app_path),
-            "-ov", "-format", "UDZO",
-            str(dmg_path)
-        ]
-        
-        self.run_command(create_dmg_cmd)
-        
-        codesign_dmg_cmd = [
-            "codesign", "--sign", signing_config["identity"],
-            "--timestamp",
-            str(dmg_path)
-        ]
-        
-        self.run_command(codesign_dmg_cmd)
-        
-        if "apple_id" in signing_config and "app_password" in signing_config:
-            self.notarize_macos_app(dmg_path, signing_config)
-    
     def notarize_macos_app(self, dmg_path, signing_config):
         """Notarize macOS application with Apple"""
         print("Notarizing with Apple...")
@@ -267,6 +231,36 @@ class BuildManager:
         
         self.run_command(signtool_cmd)
     
+    def sign_macos_app(self, signing_config):
+        """Sign macOS application and prepare for notarization"""
+        # Find the DMG created by the package step
+        dmg_path = next(self.config.build_dir.glob("*.dmg"), None)
+        if not dmg_path:
+            print("Error: No DMG found to sign. Was the --package step run?")
+            return
+
+        app_path = self.config.build_dir / "src" / "Release" / "MurmurDesktop.app"
+        
+        codesign_app_cmd = [
+            "codesign", "--sign", signing_config["identity"],
+            "--entitlements", str(self.config.root_dir / "packaging" / "macos" / "entitlements.plist"),
+            "--options", "runtime",
+            "--timestamp",
+            "--deep", "--force",
+            str(app_path)
+        ]
+        self.run_command(codesign_app_cmd)
+
+        codesign_dmg_cmd = [
+            "codesign", "--sign", signing_config["identity"],
+            "--timestamp",
+            str(dmg_path)
+        ]
+        self.run_command(codesign_dmg_cmd)
+        
+        if "apple_id" in signing_config and "app_password" in signing_config:
+            self.notarize_macos_app(dmg_path, signing_config)
+
     def create_package(self):
         """Create distribution package"""
         print("Creating distribution package...")
@@ -275,8 +269,27 @@ class BuildManager:
             self.create_windows_installer()
         elif self.config.target_os == "linux":
             self.create_linux_packages()
-        # macOS DMG is created during signing
-    
+        elif self.config.target_os == "macos":
+            self.create_macos_dmg()
+
+    def create_macos_dmg(self):
+        """Create a DMG for macOS distribution"""
+        print("Creating macOS DMG...")
+        app_path = self.config.build_dir / "src" / "Release" / "MurmurDesktop.app"
+        dmg_path = self.config.build_dir / f"MurmurDesktop-{self.config.arch}.dmg"
+
+        if not app_path.exists():
+            print(f"Error: Application bundle not found at {app_path}")
+            return
+
+        create_dmg_cmd = [
+            "hdiutil", "create", "-volname", "Murmur Desktop",
+            "-srcfolder", str(app_path),
+            "-ov", "-format", "UDZO",
+            str(dmg_path)
+        ]
+        self.run_command(create_dmg_cmd)
+
     def create_windows_installer(self):
         """Create Windows NSIS installer"""
         nsis_script = self.config.root_dir / "packaging" / "windows" / "murmur.nsi"
