@@ -126,8 +126,10 @@ class BuildManager:
             settings["compiler"] = "msvc"
             settings["compiler.version"] = "193"
             settings["compiler.runtime"] = "static" if self.config.build_type == "Release" else "dynamic"
-            del settings["compiler.libcxx"]
-            del settings["compiler.cppstd"]
+            settings["compiler.cppstd"] = "17"
+            # not valid for the msvc compiler profile
+            if "compiler.libcxx" in settings:
+                del settings["compiler.libcxx"]
 
         profile_content = "[settings]\n"
         for key, value in settings.items():
@@ -166,7 +168,8 @@ class BuildManager:
         elif self.config.target_os == "macos":
             cmake_cmd.extend([
                 "-G", "Xcode",
-                f"-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0"
+                f"-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0",
+                "-DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO"
             ])
         
         self.run_command(cmake_cmd)

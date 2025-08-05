@@ -70,7 +70,6 @@ class MurmurDesktopConan(ConanFile):
                 "libva-dev", "libvdpau-dev"                       # Hardware acceleration
             ])
         elif self.settings.os == "Windows":
-            # Windows dependencies are typically bundled
             pass
 
     def configure(self):

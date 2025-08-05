@@ -48,7 +48,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ~/.conan2
-        key: conan-windows-${{ matrix.arch }}-${{ hashFiles('conanfile.py') }}
+        key: conan-windows-${{ matrix.arch }}-${{ hashFiles('desktop/conanfile.py') }}
         restore-keys: |
           conan-windows-${{ matrix.arch }}-
     
@@ -114,7 +114,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ~/.conan2
-        key: conan-macos-universal-${{ hashFiles('conanfile.py') }}
+        key: conan-macos-universal-${{ hashFiles('desktop/conanfile.py') }}
         restore-keys: |
           conan-macos-universal-
     
@@ -126,7 +126,6 @@ jobs:
     - name: Create Self-Signed Certificate and Sign DMG
       if: startsWith(github.ref, 'refs/tags/v')
       run: |
-        # Path to the built DMG
         DMG_PATH=$(find build/macos-universal-Release -name "*.dmg" | head -n 1)
         
         security create-keychain -p "temp_password" build.keychain
@@ -185,11 +184,14 @@ jobs:
         pip install conan==${{ env.CONAN_VERSION }}
         conan profile detect --force
     
+    - name: Configure Conan Remote
+      run: conan remote add conancenter https://center.conan.io --force
+    
     - name: Cache Conan packages
       uses: actions/cache@v4
       with:
         path: ~/.conan2
-        key: conan-linux-${{ matrix.arch }}-${{ hashFiles('conanfile.py') }}
+        key: conan-linux-${{ matrix.arch }}-${{ hashFiles('desktop/conanfile.py') }}
         restore-keys: |
           conan-linux-${{ matrix.arch }}-
     
