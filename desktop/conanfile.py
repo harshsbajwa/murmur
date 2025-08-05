@@ -41,7 +41,8 @@ class MurmurDesktopConan(ConanFile):
 
     def requirements(self):
         # Core multimedia dependencies
-        self.requires("ffmpeg/7.1.1")
+        # self.requires("ffmpeg/7.1.1")
+        self.requires("ffmpeg/7.0.1")
         self.requires("libx265/3.4")
         
         # Networking and P2P  

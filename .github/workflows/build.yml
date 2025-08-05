@@ -42,7 +42,7 @@ jobs:
     - name: Install Conan
       run: |
         pip install conan~=${{ env.CONAN_VERSION }}
-        conan profile detect --force
+        conan profile detect --name=windows-x86_64 --force
     
     - name: Cache Conan packages
       uses: actions/cache@v4
@@ -118,6 +118,14 @@ jobs:
         key: conan-macos-universal-${{ hashFiles('desktop/conanfile.py') }}
         restore-keys: |
           conan-macos-universal-
+
+    - name: Free Disk Space
+      run: |
+        echo "Initial free space:"
+        df -h
+        sudo rm -rf /System/Volumes/Data/Library/Developer/CoreSimulator/Devices
+        echo "Free space after cleanup:"
+        df -h
     
     - name: Build Universal Application
       timeout-minutes: 120
@@ -183,7 +191,7 @@ jobs:
     - name: Install Conan
       run: |
         pip install conan==${{ env.CONAN_VERSION }}
-        conan profile detect --force
+        conan profile detect --name=linux-x86_64 --force
     
     - name: Configure Conan Remote
       run: conan remote add conancenter https://center.conan.io --force
@@ -246,7 +254,7 @@ jobs:
     - name: Install Conan
       run: |
         pip install conan==${{ env.CONAN_VERSION }}
-        conan profile detect --force
+        conan profile detect --name=linux-x86_64 --force
     
     - name: Run Tests
       run: |
