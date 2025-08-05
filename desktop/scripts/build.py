@@ -126,7 +126,7 @@ class BuildManager:
             settings["compiler"] = "msvc"
             settings["compiler.version"] = "193"
             settings["compiler.runtime"] = "static" if self.config.build_type == "Release" else "dynamic"
-            settings["compiler.cppstd"] = "17"
+            settings["compiler.cppstd"] = "14"
             # not valid for the msvc compiler profile
             if "compiler.libcxx" in settings:
                 del settings["compiler.libcxx"]

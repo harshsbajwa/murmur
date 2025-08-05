@@ -1,0 +1,61 @@
+{
+  "app_name": "murmur",
+  "document_root": "/app/public",
+  "listen": [
+    ":80"
+  ],
+  "worker": {
+    "file": "/app/public/index.php",
+    "num": 4,
+    "env": {
+      "APP_RUNTIME": "frankenphp"
+    }
+  },
+  "php": {
+    "memory_limit": "512M",
+    "max_execution_time": 300,
+    "upload_max_filesize": "1G",
+    "post_max_size": "1G",
+    "max_file_uploads": 50,
+    "opcache": {
+      "enable": true,
+      "memory_consumption": 256,
+      "interned_strings_buffer": 16,
+      "max_accelerated_files": 20000,
+      "validate_timestamps": false,
+      "save_comments": false,
+      "fast_shutdown": true
+    },
+    "realpath_cache_size": "4M",
+    "realpath_cache_ttl": 3600
+  },
+  "extensions": [
+    "bcmath",
+    "ctype",
+    "curl",
+    "dom",
+    "fileinfo",
+    "filter",
+    "hash",
+    "mbstring",
+    "openssl",
+    "pcre",
+    "pdo",
+    "pdo_sqlite",
+    "session",
+    "tokenizer",
+    "xml",
+    "xmlwriter",
+    "zip",
+    "zlib",
+    "gd",
+    "exif",
+    "redis",
+    "imagick",
+    "intl"
+  ],
+  "logging": {
+    "level": "info",
+    "output": "/var/log/frankenphp/app.log"
+  }
+}
