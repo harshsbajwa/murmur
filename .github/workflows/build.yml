@@ -40,10 +40,12 @@ jobs:
         cache: true
     
     - name: Install Conan
+      shell: pwsh
       run: |
         pip install conan~=2.4
         conan profile detect --name=windows-x86_64 --force
-        conan profile update settings.compiler.runtime=static windows-x86_64
+        $PROFILE_PATH = "C:\Users\runneradmin\.conan2\profiles\windows-x86_64"
+        (Get-Content $PROFILE_PATH) -replace 'compiler.runtime=dynamic', 'compiler.runtime=static' | Set-Content $PROFILE_PATH
     
     - name: Cache Conan packages
       uses: actions/cache@v4
