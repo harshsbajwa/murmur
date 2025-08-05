@@ -50,7 +50,7 @@ class MurmurDesktopConan(ConanFile):
         self.requires("openssl/[>=1.1 <4]")
         
         # Transcription
-        self.requires("whisper-cpp/1.7.4")
+        self.requires("whisper-cpp/1.7.5")
         
         # Database and logging
         self.requires("sqlite3/3.49.1")
