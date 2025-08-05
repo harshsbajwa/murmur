@@ -90,6 +90,7 @@ class BuildManager:
         conan_cmd = [
             "conan", "install", ".",
             f"--profile={self.config.conan_profile}",
+            f"--profile:build={self.config.conan_profile}", 
             f"--build=missing",
             f"--settings=build_type={self.config.build_type}",
             f"--output-folder={self.config.build_dir}"
