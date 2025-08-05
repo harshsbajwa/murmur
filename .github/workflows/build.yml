@@ -41,8 +41,9 @@ jobs:
     
     - name: Install Conan
       run: |
-        pip install conan~=${{ env.CONAN_VERSION }}
+        pip install conan~=2.4
         conan profile detect --name=windows-x86_64 --force
+        conan profile update settings.compiler.runtime=static windows-x86_64
     
     - name: Cache Conan packages
       uses: actions/cache@v4
@@ -190,7 +191,7 @@ jobs:
     
     - name: Install Conan
       run: |
-        pip install conan==${{ env.CONAN_VERSION }}
+        pip install conan~=2.4
         conan profile detect --name=linux-x86_64 --force
     
     - name: Configure Conan Remote
