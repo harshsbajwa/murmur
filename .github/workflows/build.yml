@@ -77,8 +77,8 @@ jobs:
       with:
         name: murmur-desktop-windows-${{ matrix.arch }}
         path: |
-          build/windows-${{ matrix.arch }}-${{ matrix.build_type }}/*.exe
-          build/windows-${{ matrix.arch }}-${{ matrix.build_type }}/*.msi
+          desktop/build/windows-${{ matrix.arch }}-${{ matrix.build_type }}/*.exe
+          desktop/build/windows-${{ matrix.arch }}-${{ matrix.build_type }}/*.msi
         retention-days: 30
 
   build-macos:
@@ -142,7 +142,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: murmur-desktop-macos-universal
-        path: build/macos-universal-Release/*.dmg
+        path: desktop/build/macos-universal-Release/*.dmg
         retention-days: 30
   
   build-linux:
@@ -213,9 +213,9 @@ jobs:
       with:
         name: murmur-desktop-linux-${{ matrix.arch }}
         path: |
-          build/linux-${{ matrix.arch }}-${{ matrix.build_type }}/packages/*.deb
-          build/linux-${{ matrix.arch }}-${{ matrix.build_type }}/packages/*.rpm
-          build/linux-${{ matrix.arch }}-${{ matrix.build_type }}/*.AppImage
+          desktop/build/linux-${{ matrix.arch }}-${{ matrix.build_type }}/packages/*.deb
+          desktop/build/linux-${{ matrix.arch }}-${{ matrix.build_type }}/packages/*.rpm
+          desktop/build/linux-${{ matrix.arch }}-${{ matrix.build_type }}/*.AppImage
         retention-days: 30
 
   test:

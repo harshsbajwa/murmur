@@ -4,7 +4,6 @@
         "conan": {}
     },
     "include": [
-        "build/Debug/generators/CMakePresets.json",
-        "build/macos-armv8-Release/CMakePresets.json"
+        "build/macos-universal-Release/CMakePresets.json"
     ]
 }

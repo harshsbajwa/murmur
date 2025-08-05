@@ -122,12 +122,12 @@ class BuildManager:
             settings["compiler"] = "apple-clang"
             settings["compiler.version"] = "14"
             settings["compiler.libcxx"] = "libc++"
+            settings["os.version"] = "11.0"
         elif self.config.target_os == "windows":
             settings["compiler"] = "msvc"
             settings["compiler.version"] = "193"
             settings["compiler.runtime"] = "static" if self.config.build_type == "Release" else "dynamic"
             settings["compiler.cppstd"] = "14"
-            settings["compiler.toolset"] = "v143" 
             if "compiler.libcxx" in settings:
                 del settings["compiler.libcxx"]
 
