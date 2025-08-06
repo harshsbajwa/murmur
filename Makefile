@@ -145,3 +145,4 @@ setup-production:
 	@if [ ! -f .env ]; then cp .env.production .env; echo "Created .env from .env.production"; fi
 	@echo "Update .env with configuration values"
 	@echo "Generate APP_KEY with: php artisan key:generate"
+	
