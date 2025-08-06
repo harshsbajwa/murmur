@@ -23,7 +23,7 @@ services:
       - APP_DEBUG=${APP_DEBUG:-true}
       - APP_KEY=${APP_KEY:-base64:vviPCkQY9bQc7ubPKwSFJkpSYxA4oTHaSwfBDaapczk=}
       - DB_CONNECTION=sqlite
-      - DB_DATABASE=/app/database/database.sqlite
+      - DB_DATABASE=/database/database.sqlite
       - CACHE_DRIVER=redis
       - SESSION_DRIVER=redis
       - QUEUE_CONNECTION=redis
@@ -106,7 +106,7 @@ services:
       - APP_DEBUG=${APP_DEBUG:-true}
       - APP_KEY=${APP_KEY:-base64:vviPCkQY9bQc7ubPKwSFJkpSYxA4oTHaSwfBDaapczk=}
       - DB_CONNECTION=sqlite
-      - DB_DATABASE=/app/database/database.sqlite
+      - DB_DATABASE=/database/database.sqlite
       - CACHE_DRIVER=redis
       - SESSION_DRIVER=redis
       - QUEUE_CONNECTION=redis
@@ -139,7 +139,7 @@ services:
       - APP_DEBUG=${APP_DEBUG:-false}
       - APP_KEY=${APP_KEY}
       - DB_CONNECTION=sqlite
-      - DB_DATABASE=/app/database/database.sqlite
+      - DB_DATABASE=/database/database.sqlite
       - CACHE_DRIVER=redis
       - SESSION_DRIVER=redis
       - REDIS_HOST=redis

@@ -103,14 +103,14 @@ status:
 backup:
 	@echo "Creating backup..."
 	@mkdir -p backups
-	@docker-compose exec caddy cp /app/database/database.sqlite /tmp/backup-$(shell date +%Y%m%d_%H%M%S).sqlite
+	@docker-compose exec caddy cp /database/database.sqlite /tmp/backup-$(shell date +%Y%m%d_%H%M%S).sqlite
 	@docker cp $$(docker-compose ps -q caddy):/tmp/backup-$(shell date +%Y%m%d_%H%M%S).sqlite ./backups/
 	@echo "Backup created in ./backups/"
 
 restore:
 	@if [ -z "$(BACKUP)" ]; then echo "Specify BACKUP=filename"; exit 1; fi
 	@echo "Restoring from backup: $(BACKUP)"
-	@docker cp ./backups/$(BACKUP) $$(docker-compose ps -q caddy):/app/database/database.sqlite
+	@docker cp ./backups/$(BACKUP) $$(docker-compose ps -q caddy):/database/database.sqlite
 	@echo "Database restored from $(BACKUP)"
 
 monitoring-up:
