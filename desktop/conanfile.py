@@ -34,7 +34,6 @@ class MurmurDesktopConan(ConanFile):
         "openssl/*:shared": False,
         # Whisper.cpp options
         "whisper-cpp/*:shared": False,
-        "whisper-cpp/*:with_metal": True,  # macOS Metal acceleration
         "whisper-cpp/*:with_cuda": False,  # Disable CUDA for compatibility
         "whisper-cpp/*:with_openvino": False,
     }
@@ -82,13 +81,15 @@ class MurmurDesktopConan(ConanFile):
         # Platform-specific configurations
         if self.settings.os == "Windows":
             self.options["ffmpeg/*"].with_cuda = False  # Avoid driver dependencies
+            self.options["whisper-cpp/*"].with_metal = False
         elif self.settings.os == "Macos":
             self.options["whisper-cpp/*"].with_metal = True
             self.options["ffmpeg/*"].with_videotoolbox = True
         elif self.settings.os == "Linux":
             self.options["ffmpeg/*"].with_vaapi = True
             self.options["ffmpeg/*"].with_vdpau = True
-        
+            self.options["whisper-cpp/*"].with_metal = False
+
     def generate(self):
         deps = CMakeDeps(self)
         deps.generate()

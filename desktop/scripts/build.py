@@ -7,6 +7,7 @@ import argparse
 import shutil
 import platform
 from pathlib import Path
+import time
 
 class BuildConfiguration:
     def __init__(self, target_os=None, arch=None, build_type="Release"):
@@ -277,14 +278,14 @@ class BuildManager:
             self.create_macos_dmg()
 
     def create_macos_dmg(self):
-        """Create a DMG for macOS distribution"""
+        """Create a DMG for macOS distribution."""
         print("Creating macOS DMG...")
         app_path = self.config.build_dir / "src" / "Release" / "MurmurDesktop.app"
         dmg_path = self.config.build_dir / f"MurmurDesktop-{self.config.arch}.dmg"
 
         if not app_path.exists():
             print(f"Error: Application bundle not found at {app_path}")
-            return
+            raise FileNotFoundError(f"Application bundle not found at {app_path}")
 
         create_dmg_cmd = [
             "hdiutil", "create", "-volname", "Murmur Desktop",
@@ -292,7 +293,32 @@ class BuildManager:
             "-ov", "-format", "UDZO",
             str(dmg_path)
         ]
-        self.run_command(create_dmg_cmd)
+        
+        # https://github.com/actions/runner-images/issues/7522
+        max_retries = 10
+        retry_delay_seconds = 5
+
+        for attempt in range(max_retries):
+            try:
+                print(f"Attempting to create DMG (try {attempt + 1}/{max_retries})...")
+                self.run_command(create_dmg_cmd, timeout=180)
+                
+                if dmg_path.exists():
+                    print("DMG created successfully.")
+                    return
+                else:
+                    print("hdiutil command succeeded but DMG file was not created. Retrying...")
+
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+                print(f"DMG creation failed on attempt {attempt + 1}: {e}")
+                if attempt < max_retries - 1:
+                    print(f"Retrying in {retry_delay_seconds} seconds...")
+                    time.sleep(retry_delay_seconds)
+                else:
+                    print("Max retries reached. DMG creation failed.")
+                    raise
+        
+        raise Exception("Failed to create DMG after all retries.")
 
     def create_windows_installer(self):
         """Create Windows NSIS installer"""
