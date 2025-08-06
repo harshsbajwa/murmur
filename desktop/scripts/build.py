@@ -93,7 +93,10 @@ class BuildManager:
             f"--profile:build={self.config.conan_profile}", 
             f"--build=missing",
             f"--settings=build_type={self.config.build_type}",
-            f"--output-folder={self.config.build_dir}"
+            f"--output-folder={self.config.build_dir}",
+            "--update",
+            "-c", "tools.system.package_manager:mode=install",
+            "-c", "tools.system.package_manager:sudo=True"
         ]
         
         if self.config.build_type == "Release":

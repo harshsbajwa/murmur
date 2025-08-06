@@ -59,7 +59,7 @@ jobs:
       uses: microsoft/setup-msbuild@v1
     
     - name: Build Application
-      timeout-minutes: 120
+      timeout-minutes: 180
       run: |
         python desktop/scripts/build.py --target-os windows --arch ${{ matrix.arch }} --build-type ${{ matrix.build_type }} --clean --package
     
