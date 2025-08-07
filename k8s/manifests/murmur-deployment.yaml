@@ -1,0 +1,190 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: murmur-app
+  namespace: murmur
+  labels:
+    app.kubernetes.io/name: murmur
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/part-of: murmur-stack
+    app.kubernetes.io/component: web
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: murmur
+      app.kubernetes.io/part-of: murmur-stack
+      app.kubernetes.io/component: web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: murmur
+        app.kubernetes.io/version: "1.0.0"
+        app.kubernetes.io/part-of: murmur-stack
+        app.kubernetes.io/component: web
+    spec:
+      initContainers:
+      - name: init-storage
+        image: busybox:1.35
+        command: ['sh', '-c']
+        args:
+        - |
+          mkdir -p /app/database /app/storage/app/public /app/storage/framework/{cache,sessions,testing,views} /app/storage/logs
+          mkdir -p /home/harsh/Code/murmur/storage/logs /home/harsh/Code/murmur/storage/framework/{cache,sessions,views}
+          chown -R 1000:1000 /app/database /app/storage
+          chmod -R 755 /app/database /app/storage
+          chmod -R 777 /home/harsh/Code/murmur/storage || true
+        volumeMounts:
+        - name: database-storage
+          mountPath: /app/database
+        - name: app-storage
+          mountPath: /app/storage
+        - name: app-code
+          mountPath: /home/harsh/Code/murmur
+        securityContext:
+          runAsUser: 0
+      containers:
+      - name: murmur
+        image: dunglas/frankenphp:latest-alpine
+        ports:
+        - containerPort: 80
+          name: http
+        - containerPort: 2019
+          name: metrics
+        env:
+        - name: APP_KEY
+          valueFrom:
+            secretKeyRef:
+              name: murmur-secrets
+              key: APP_KEY
+        - name: PUSHER_APP_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: murmur-secrets
+              key: PUSHER_APP_SECRET
+        envFrom:
+        - configMapRef:
+            name: murmur-config
+        volumeMounts:
+        - name: app-code
+          mountPath: /app
+        - name: caddy-config
+          mountPath: /etc/caddy
+        - name: frankenphp-config
+          mountPath: /etc/frankenphp
+        - name: database-storage
+          mountPath: /app/database
+        - name: app-storage
+          mountPath: /app/storage
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 80
+          initialDelaySeconds: 40
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 80
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        securityContext:
+          runAsUser: 1000
+          runAsGroup: 1000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+      - name: scheduler
+        image: dunglas/frankenphp:latest-alpine
+        command: ['sh', '-c']
+        args:
+        - |
+          while true; do
+            php artisan schedule:run
+            sleep 60
+          done
+        workingDir: /app
+        env:
+        - name: APP_KEY
+          valueFrom:
+            secretKeyRef:
+              name: murmur-secrets
+              key: APP_KEY
+        envFrom:
+        - configMapRef:
+            name: murmur-config
+        volumeMounts:
+        - name: app-code
+          mountPath: /app
+        - name: database-storage
+          mountPath: /app/database
+        - name: app-storage
+          mountPath: /app/storage
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        securityContext:
+          runAsUser: 1000
+          runAsGroup: 1000
+          allowPrivilegeEscalation: false
+      volumes:
+      - name: app-code
+        hostPath:
+          path: /home/harsh/Code/murmur
+          type: Directory
+      - name: caddy-config
+        configMap:
+          name: caddy-config
+      - name: frankenphp-config
+        configMap:
+          name: frankenphp-config
+      - name: database-storage
+        persistentVolumeClaim:
+          claimName: murmur-db-pvc
+      - name: app-storage
+        hostPath:
+          path: /home/harsh/murmur-storage/storage
+          type: DirectoryOrCreate
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: murmur-app
+  namespace: murmur
+  labels:
+    app.kubernetes.io/name: murmur
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/part-of: murmur-stack
+    app.kubernetes.io/component: web
+spec:
+  type: NodePort
+  ports:
+  - port: 80
+    targetPort: 80
+    nodePort: 32080
+    protocol: TCP
+    name: http
+  - port: 2019
+    targetPort: 2019
+    nodePort: 32019
+    protocol: TCP
+    name: metrics
+  selector:
+    app.kubernetes.io/name: murmur
+    app.kubernetes.io/part-of: murmur-stack
+    app.kubernetes.io/component: web

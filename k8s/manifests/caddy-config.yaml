@@ -1,0 +1,182 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: caddy-config
+  namespace: murmur
+  labels:
+    app.kubernetes.io/name: murmur
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/part-of: murmur-stack
+data:
+  Caddyfile: |
+    {
+      servers {
+        metrics
+      }
+
+      frankenphp {
+        num_threads 4
+      }
+    }
+
+    :80 {
+      encode gzip
+      root * public
+
+      log {
+        output stdout
+        format json
+        level INFO
+      }
+
+      header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "geolocation=()"
+        -Server
+      }
+
+      route {
+        @cors_preflight {
+          path /api/*
+          method OPTIONS
+        }
+        handle @cors_preflight {
+          header Access-Control-Allow-Origin "*"
+          header Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+          header Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With"
+          header Access-Control-Max-Age "86400"
+          respond "" 204
+        }
+
+        @static {
+          path *.css *.js *.ico *.png *.jpg *.jpeg *.gif *.svg *.woff *.woff2 *.ttf *.eot *.mp4 *.webm *.mp3 *.wav
+        }
+        handle @static {
+          header Cache-Control "public, max-age=31536000, immutable"
+          file_server
+        }
+
+        handle /vendor/* {
+          header Cache-Control "public, max-age=2592000"
+          file_server
+        }
+
+        handle /build/* {
+          header Cache-Control "public, max-age=31536000, immutable"
+          file_server
+        }
+
+        @websocket {
+          header Connection *Upgrade*
+          header Upgrade websocket
+        }
+        handle @websocket {
+          reverse_proxy murmur-soketi:6001
+        }
+
+        @api path /api/*
+        header @api -Cache-Control
+        header @api -Expires
+        header @api Cache-Control "no-store, no-cache, must-revalidate"
+        header @api Access-Control-Allow-Origin "*"
+        header @api Access-Control-Allow-Credentials "true"
+
+        php_server
+      }
+
+      handle_errors {
+        @5xx expression {http.error.status_code} >= 500
+        handle @5xx {
+          respond "Internal Server Error" 500
+        }
+        
+        @4xx expression {http.error.status_code} >= 400
+        handle @4xx {
+          respond "Not Found" 404
+        }
+      }
+    }
+
+    :2019 {
+      handle /metrics {
+        metrics
+      }
+      respond /health "OK" 200
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frankenphp-config
+  namespace: murmur
+  labels:
+    app.kubernetes.io/name: murmur
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/part-of: murmur-stack
+data:
+  config.json: |
+    {
+      "app_name": "murmur",
+      "document_root": "/app/public",
+      "listen": [
+        ":80"
+      ],
+      "worker": {
+        "file": "/app/public/index.php",
+        "num": 4,
+        "env": {
+          "APP_RUNTIME": "frankenphp"
+        }
+      },
+      "php": {
+        "memory_limit": "512M",
+        "max_execution_time": 300,
+        "upload_max_filesize": "1G",
+        "post_max_size": "1G",
+        "max_file_uploads": 50,
+        "opcache": {
+          "enable": true,
+          "memory_consumption": 256,
+          "interned_strings_buffer": 16,
+          "max_accelerated_files": 20000,
+          "validate_timestamps": false,
+          "save_comments": false,
+          "fast_shutdown": true
+        },
+        "realpath_cache_size": "4M",
+        "realpath_cache_ttl": 3600
+      },
+      "extensions": [
+        "bcmath",
+        "ctype",
+        "curl",
+        "dom",
+        "fileinfo",
+        "filter",
+        "hash",
+        "mbstring",
+        "openssl",
+        "pcre",
+        "pdo",
+        "pdo_sqlite",
+        "session",
+        "tokenizer",
+        "xml",
+        "xmlwriter",
+        "zip",
+        "zlib",
+        "gd",
+        "exif",
+        "redis",
+        "imagick",
+        "intl"
+      ],
+      "logging": {
+        "level": "info",
+        "output": "stdout"
+      }
+    }

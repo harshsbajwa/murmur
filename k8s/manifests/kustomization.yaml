@@ -1,0 +1,26 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: murmur
+
+resources:
+- namespace.yaml
+- pv-pvc.yaml
+- configmap.yaml
+- caddy-config.yaml
+- secret.yaml
+- redis-deployment.yaml
+- soketi-deployment.yaml
+- murmur-deployment.yaml
+
+commonLabels:
+  app.kubernetes.io/instance: murmur-prod
+  environment: production
+
+images:
+- name: dunglas/frankenphp
+  newTag: latest-alpine
+- name: redis
+  newTag: 7-alpine
+- name: quay.io/soketi/soketi
+  newTag: 1.6-16-alpine

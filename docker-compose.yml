@@ -23,10 +23,11 @@ services:
       - APP_DEBUG=${APP_DEBUG:-true}
       - APP_KEY=${APP_KEY:-base64:vviPCkQY9bQc7ubPKwSFJkpSYxA4oTHaSwfBDaapczk=}
       - DB_CONNECTION=sqlite
-      - DB_DATABASE=/database/database.sqlite
-      - CACHE_DRIVER=redis
+      - DB_DATABASE=/app/database/database.sqlite
+      - CACHE_STORE=redis
       - SESSION_DRIVER=redis
       - QUEUE_CONNECTION=redis
+      - REDIS_CLIENT=predis
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - BROADCAST_DRIVER=pusher
@@ -88,7 +89,7 @@ services:
     networks:
       - murmur-network
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:6001/"]
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:6001/ >/dev/null 2>&1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -106,10 +107,11 @@ services:
       - APP_DEBUG=${APP_DEBUG:-true}
       - APP_KEY=${APP_KEY:-base64:vviPCkQY9bQc7ubPKwSFJkpSYxA4oTHaSwfBDaapczk=}
       - DB_CONNECTION=sqlite
-      - DB_DATABASE=/database/database.sqlite
-      - CACHE_DRIVER=redis
+      - DB_DATABASE=/app/database/database.sqlite
+      - CACHE_STORE=redis
       - SESSION_DRIVER=redis
       - QUEUE_CONNECTION=redis
+      - REDIS_CLIENT=predis
       - REDIS_HOST=redis
       - REDIS_PORT=6379
     depends_on:
@@ -117,9 +119,9 @@ services:
     networks:
       - murmur-network
     healthcheck:
-      test: ["CMD", "php", "artisan", "queue:monitor", "--max-wait=60"]
-      interval: 60s
-      timeout: 30s
+      test: ["CMD", "sh", "-c", "ps aux | grep -q '[q]ueue:work' || exit 1"]
+      interval: 30s
+      timeout: 10s
       retries: 3
 
   scheduler:
@@ -139,15 +141,21 @@ services:
       - APP_DEBUG=${APP_DEBUG:-false}
       - APP_KEY=${APP_KEY}
       - DB_CONNECTION=sqlite
-      - DB_DATABASE=/database/database.sqlite
-      - CACHE_DRIVER=redis
+      - DB_DATABASE=/app/database/database.sqlite
+      - CACHE_STORE=redis
       - SESSION_DRIVER=redis
+      - REDIS_CLIENT=predis
       - REDIS_HOST=redis
       - REDIS_PORT=6379
     depends_on:
       - redis
     networks:
       - murmur-network
+    healthcheck:
+      test: ["CMD", "sh", "-c", "ps aux | grep -q '[c]rond' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   prometheus:
     image: prom/prometheus:latest

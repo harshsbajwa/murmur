@@ -1,0 +1,207 @@
+---
+- name: Deploy Murmur to Kubernetes
+  hosts: localhost
+  gather_facts: true
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  
+  tasks:
+    - name: Check prerequisites
+      block:
+        - name: Check if required tools are installed
+          command: "{{ item }}"
+          register: tool_check
+          failed_when: tool_check.rc != 0
+          changed_when: false
+          loop:
+            - "kubectl version --client"
+            - "composer --version"
+            - "pnpm --version"
+            - "terraform version"
+          
+        - name: Check Kubernetes connectivity
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Node
+          register: k8s_check
+          
+        - name: Display cluster info
+          debug:
+            msg: "Connected to Kubernetes cluster with {{ k8s_check.resources | length }} nodes"
+
+    - name: Setup storage directories
+      block:
+        - name: Create storage directories
+          file:
+            path: "{{ item }}"
+            state: directory
+            mode: '0755'
+          loop: "{{ storage_dirs }}"
+          
+        - name: Copy database if it doesn't exist
+          copy:
+            src: "{{ project_root }}/database/database.sqlite"
+            dest: "{{ storage_root }}/database/database.sqlite"
+            mode: '0644'
+          when: 
+            - not (storage_root + '/database/database.sqlite') is exists
+            - (project_root + '/database/database.sqlite') is exists
+
+    - name: Build application
+      block:
+        - name: Install PHP dependencies
+          composer:
+            command: install
+            working_dir: "{{ project_root }}"
+            optimize_autoloader: true
+            no_dev: true
+          
+        - name: Install Node.js dependencies
+          npm:
+            path: "{{ project_root }}"
+            executable: pnpm
+            state: present
+            
+        - name: Build frontend assets (prebuild)
+          npm:
+            path: "{{ project_root }}"
+            executable: pnpm
+            production: true
+            ci: false
+          register: prebuild
+          environment:
+            NODE_ENV: production
+          
+        - name: Run pnpm prebuild
+          command: pnpm run prebuild
+          args:
+            chdir: "{{ project_root }}"
+          
+        - name: Run pnpm build
+          command: pnpm run build
+          args:
+            chdir: "{{ project_root }}"
+          
+        - name: Optimize Laravel application
+          command: "{{ item }}"
+          args:
+            chdir: "{{ project_root }}"
+          loop:
+            - "php artisan optimize"
+            - "php artisan route:cache"
+            - "php artisan view:cache"
+
+    - name: Deploy infrastructure with Terraform
+      block:
+        - name: Initialize Terraform
+          terraform:
+            project_path: "{{ project_root }}/k8s/terraform"
+            state: present
+            force_init: true
+          
+        - name: Apply Terraform configuration
+          terraform:
+            project_path: "{{ project_root }}/k8s/terraform"
+            state: present
+          register: terraform_result
+          
+        - name: Display Terraform outputs
+          debug:
+            var: terraform_result.outputs
+
+    - name: Deploy to Kubernetes
+      block:
+        - name: Apply Kubernetes manifests
+          kubernetes.core.k8s:
+            state: present
+            definition: "{{ lookup('kubernetes.core.kustomize', dir=project_root + '/k8s/manifests/') }}"
+          register: k8s_apply
+          
+        - name: Wait for deployment to be ready
+          kubernetes.core.k8s_info:
+            api_version: apps/v1
+            kind: Deployment
+            name: "{{ k8s_deployment_name }}"
+            namespace: "{{ k8s_namespace }}"
+            wait: true
+            wait_condition:
+              type: Available
+              status: "True"
+            wait_timeout: 300
+
+    - name: Health check and verification
+      block:
+        - name: Get service information
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Service
+            name: "{{ k8s_deployment_name }}"
+            namespace: "{{ k8s_namespace }}"
+          register: service_info
+          
+        - name: Get node information
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Node
+          register: node_info
+          
+        - name: Set facts for health check
+          set_fact:
+            node_ip: "{{ node_info.resources[0].status.addresses | selectattr('type', 'equalto', 'InternalIP') | map(attribute='address') | first }}"
+            nodeport: "{{ service_info.resources[0].spec.ports | selectattr('name', 'equalto', 'http') | map(attribute='nodePort') | first }}"
+          
+        - name: Perform health check
+          uri:
+            url: "http://{{ node_ip }}:{{ nodeport }}/health"
+            method: GET
+            timeout: 10
+          register: health_check
+          retries: 10
+          delay: 5
+          until: health_check.status == 200
+          
+        - name: Display deployment information
+          debug:
+            msg: |
+              Deployment successful!
+              Application URL: http://{{ node_ip }}:{{ nodeport }}
+              Health Check URL: http://{{ node_ip }}:{{ nodeport }}/health
+              Status: {{ health_check.status }}
+
+    - name: Configure Cloudflare Tunnel
+      block:
+        - name: Update Cloudflare tunnel configuration
+          template:
+            src: cloudflare-config.yml.j2
+            dest: "{{ cloudflared_config }}"
+            backup: true
+          vars:
+            service_url: "http://{{ node_ip }}:{{ nodeport }}"
+          register: tunnel_config
+          
+        - name: Restart Cloudflare tunnel
+          shell: |
+            pkill cloudflared || true
+            sleep 2
+            nohup cloudflared tunnel --config {{ cloudflared_config }} run alam > /dev/null 2>&1 &
+          when: tunnel_config.changed
+
+    - name: Display final status
+      debug:
+        msg: |
+          Murmur deployment completed successfully
+          
+          Status:
+          - Namespace: {{ k8s_namespace }}
+          - Deployment: {{ k8s_deployment_name }}
+          - Replicas: {{ k8s_replicas }}
+          
+          Access URLs:
+          - Local: http://{{ node_ip }}:{{ nodeport }}
+          - Health: http://{{ node_ip }}:{{ nodeport }}/health
+          - External: {{ app_url }} (via Cloudflare Tunnel)
+          
+          Management:
+          - Scale pods: ./deploy/scripts/manage-pods.sh up [replicas]
+          - View logs: ./deploy/scripts/manage-pods.sh logs
+          - Pod status: ./deploy/scripts/manage-pods.sh status

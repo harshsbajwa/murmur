@@ -1,0 +1,109 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: murmur-soketi
+  namespace: murmur
+  labels:
+    app.kubernetes.io/name: soketi
+    app.kubernetes.io/version: "1.6"
+    app.kubernetes.io/part-of: murmur-stack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: soketi
+      app.kubernetes.io/part-of: murmur-stack
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: soketi
+        app.kubernetes.io/version: "1.6"
+        app.kubernetes.io/part-of: murmur-stack
+    spec:
+      containers:
+      - name: soketi
+        image: quay.io/soketi/soketi:1.6-16-alpine
+        ports:
+        - containerPort: 6001
+          name: websocket
+        - containerPort: 9601
+          name: metrics
+        env:
+        - name: SOKETI_DEBUG
+          value: "0"
+        - name: SOKETI_METRICS_SERVER_PORT
+          value: "9601"
+        - name: SOKETI_DEFAULT_APP_ID
+          valueFrom:
+            configMapKeyRef:
+              name: murmur-config
+              key: PUSHER_APP_ID
+        - name: SOKETI_DEFAULT_APP_KEY
+          valueFrom:
+            configMapKeyRef:
+              name: murmur-config
+              key: PUSHER_APP_KEY
+        - name: SOKETI_DEFAULT_APP_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: murmur-secrets
+              key: PUSHER_APP_SECRET
+        - name: SOKETI_DEFAULT_APP_ENABLE_CLIENT_MESSAGES
+          value: "true"
+        - name: SOKETI_DEFAULT_APP_ENABLED
+          value: "true"
+        - name: SOKETI_DEFAULT_APP_MAX_CONNECTIONS
+          value: "1000"
+        - name: SOKETI_DEFAULT_APP_MAX_BACKEND_EVENTS_PER_SEC
+          value: "100"
+        - name: SOKETI_DEFAULT_APP_MAX_CLIENT_EVENTS_PER_SEC
+          value: "100"
+        - name: SOKETI_DEFAULT_APP_MAX_READ_REQ_PER_SEC
+          value: "100"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 6001
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 6001
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: murmur-soketi
+  namespace: murmur
+  labels:
+    app.kubernetes.io/name: soketi
+    app.kubernetes.io/version: "1.6"
+    app.kubernetes.io/part-of: murmur-stack
+spec:
+  type: ClusterIP
+  ports:
+  - port: 6001
+    targetPort: 6001
+    protocol: TCP
+    name: websocket
+  - port: 9601
+    targetPort: 9601
+    protocol: TCP
+    name: metrics
+  selector:
+    app.kubernetes.io/name: soketi
+    app.kubernetes.io/part-of: murmur-stack
